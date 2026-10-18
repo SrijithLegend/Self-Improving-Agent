@@ -1,11 +1,14 @@
-
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 import os
+from pathlib import Path
+from workspace import Workspace
+
 
 load_dotenv()
 api_key = os.getenv("GENAI_API_KEY")
+workspace = Workspace(Path(__file__).resolve().parent)
 
 if not api_key:
     raise RuntimeError("GENAI_API_KEY is missing from your .env file")
@@ -17,16 +20,43 @@ MAX_STEPS = 5
 # 1. Define both tools
 tools = [
     types.FunctionDeclaration(
-        name="list_files",
-        description="List files in the current working directory.",
+        name="read_file",
+        description="Read a UTF-8 text file inside the workspace.",
         parameters=types.Schema(
             type=types.Type.OBJECT,
-            properties={}
+            properties={
+                "path": types.Schema(
+                    type=types.Type.STRING,
+                    description="Relative path of the file to read."
+                )
+            },
+            required=["path"]
         )
     ),
     types.FunctionDeclaration(
-        name="get_current_directory",
-        description="Return the current working directory path.",
+        name="write_file",
+        description=(
+            "Write text to a file inside the workspace. "
+            "Writing to test_*.py files is forbidden."
+        ),
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "path": types.Schema(
+                    type=types.Type.STRING,
+                    description="Relative path of the file to write."
+                ),
+                "content": types.Schema(
+                    type=types.Type.STRING,
+                    description="Text content to write."
+                )
+            },
+            required=["path", "content"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="run_tests",
+        description="Run pytest in the workspace and return the results.",
         parameters=types.Schema(
             type=types.Type.OBJECT,
             properties={}
@@ -35,7 +65,7 @@ tools = [
 ]
 
 config = types.GenerateContentConfig(
-    tools=[types.Tool(function_declarations=tools)]
+    tools=tools
 )
 
 # 2. Start one conversation
@@ -53,6 +83,34 @@ history = [
         ]
     )
 ]
+
+
+def execute_tool(name, args):
+    try:
+        if name == "read_file":
+            return workspace.read_file(args["path"])
+
+        elif name == "write_file":
+            return workspace.write_file(
+                args["path"],
+                args["content"]
+            )
+
+        elif name == "run_tests":
+            return workspace.run_tests()
+
+        else:
+            return {
+                "result": f"Unknown tool: {name}",
+                "is_error": True,
+            }
+
+    except Exception as e:
+        return {
+            "result": str(e)[:4000],
+            "is_error": True,
+        }
+
 
 # 3. Agent loop
 for step in range(MAX_STEPS):
@@ -90,24 +148,7 @@ for step in range(MAX_STEPS):
         print("\nREQUESTED TOOL:", call.name)
         print("ARGUMENTS:", call.args)
 
-        try:
-            if call.name == "list_files":
-                result = {
-                    "files": os.listdir(os.getcwd())
-                }
-
-            elif call.name == "get_current_directory":
-                result = {
-                    "directory": os.getcwd()
-                }
-
-            else:
-                result = {
-                    "error": f"Unknown tool: {call.name}"
-                }
-
-        except Exception as e:
-            result = {"error": str(e)}
+        result = execute_tool(call.name, call.args)
 
         print("TOOL RESULT:", result)
 
@@ -118,7 +159,7 @@ for step in range(MAX_STEPS):
             )
         )
 
-    # Send all results in one message
+    # Send all results in one message after the loop
     history.append(
         types.Content(
             role="user",
