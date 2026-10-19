@@ -17,11 +17,16 @@ OPENAI_COMPATIBLE = {
     "ollama": "http://localhost:11434/v1",
 }
 PROVIDERS = {"gemini", "anthropic", *OPENAI_COMPATIBLE}
-DEFAULT_MODELS = {"gemini": "gemini-flash-latest", "anthropic": "claude-haiku-5-5"}
+# Comma-separated = fallback chain: free models get overloaded (503), so try the next one.
+DEFAULT_MODELS = {"gemini": "gemini-flash-latest,gemini-flash-lite-latest", "anthropic": "claude-haiku-5-5"}
 
 
 class LLMError(Exception):
     pass
+
+
+class Unavailable(LLMError):
+    """Overloaded/rate-limited/unreachable after retries; worth trying the next model in the chain."""
 
 
 class LLM:
@@ -36,18 +41,28 @@ class LLM:
             raise LLMError("Ollama (localhost) is only available on self-hosted servers.")
         if not api_key and provider != "ollama":
             raise LLMError("Missing LLM API key.")
-        self.model = model or DEFAULT_MODELS.get(provider)
-        if not self.model:
+        self.models = [m.strip() for m in (model or DEFAULT_MODELS.get(provider, "")).split(",") if m.strip()]
+        if not self.models:
             raise LLMError(f"Provider '{provider}' needs an explicit model name.")
+        self.model = self.models[0]
+        self.tries = 7 if len(self.models) == 1 else 3  # with fallbacks, move on sooner
         self.provider, self.api_key = provider, api_key
         self.base_url = (base_url or OPENAI_COMPATIBLE.get(provider, "")).rstrip("/")
         self.calls = 0
-        self.http = httpx.Client(timeout=120)
+        self.http = httpx.Client(timeout=httpx.Timeout(90, connect=10))
 
     def text(self, system, prompt, temperature=0.7, as_json=False):
         self.calls += 1
+        for i, model in enumerate(self.models):
+            try:
+                return self._text(model, system, prompt, temperature, as_json)
+            except Unavailable:
+                if i == len(self.models) - 1:
+                    raise
+
+    def _text(self, model, system, prompt, temperature, as_json):
         if self.provider == "gemini":
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
             gen = {"temperature": temperature}
             if as_json:
                 gen["responseMimeType"] = "application/json"
@@ -65,13 +80,13 @@ class LLM:
         if self.provider == "anthropic":
             data = self._post("https://api.anthropic.com/v1/messages",
                               {"x-api-key": self.api_key, "anthropic-version": "2023-06-01"},
-                              {"model": self.model, "max_tokens": 4096, "temperature": temperature,
+                              {"model": model, "max_tokens": 4096, "temperature": temperature,
                                "system": system, "messages": [{"role": "user", "content": prompt}]})
             return "".join(b.get("text", "") for b in data.get("content", []))
 
         data = self._post(f"{self.base_url}/chat/completions",
                           {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {},
-                          {"model": self.model, "temperature": temperature,
+                          {"model": model, "temperature": temperature,
                            "messages": [{"role": "system", "content": system},
                                         {"role": "user", "content": prompt}]})
         try:
@@ -83,13 +98,14 @@ class LLM:
         raw = self.text(system + "\nRespond with a single JSON object only.", prompt, temperature, as_json=True)
         return parse_json(raw)
 
-    def _post(self, url, headers, body, tries=7):
+    def _post(self, url, headers, body):
+        tries = self.tries
         for attempt in range(tries):
             try:
                 r = self.http.post(url, headers=headers, json=body)
             except httpx.HTTPError as e:
                 if attempt == tries - 1:
-                    raise LLMError(f"Network error calling {self.provider}: {e}")
+                    raise Unavailable(f"Network error calling {self.provider}: {e}")
                 time.sleep(2 ** attempt)
                 continue
             # Free tiers rate-limit hard; back off and retry instead of failing the task.
@@ -97,6 +113,8 @@ class LLM:
                 retry_after = r.headers.get("retry-after", "")
                 time.sleep(min(float(retry_after) if retry_after.isdigit() else 2 ** (attempt + 1), 60))
                 continue
+            if r.status_code in (429, 500, 502, 503, 504):
+                raise Unavailable(f"{self.provider} error {r.status_code}: {r.text[:300]}")
             if r.status_code >= 400:
                 raise LLMError(f"{self.provider} error {r.status_code}: {r.text[:500]}")
             return r.json()

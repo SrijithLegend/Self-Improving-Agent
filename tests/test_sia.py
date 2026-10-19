@@ -137,7 +137,29 @@ def test_llm_config_guards(monkeypatch):
         LLM("groq", "k")  # needs explicit model
     with pytest.raises(LLMError):
         LLM("nope", "k")
-    assert LLM("gemini", "k").model == "gemini-flash-latest"
+    assert LLM("gemini", "k").models == ["gemini-flash-latest", "gemini-flash-lite-latest"]
+
+
+def test_model_fallback_on_overload(monkeypatch):
+    import httpx
+    hits = []
+
+    def handler(request):
+        hits.append(request.url.path)
+        if "bad-model" in request.url.path:
+            return httpx.Response(503, json={"error": "overloaded"})
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "ok"}]}}]})
+
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    llm = LLM("gemini", "k", "bad-model, good-model")
+    llm.http = httpx.Client(transport=httpx.MockTransport(handler))
+    assert llm.text("s", "p") == "ok"
+    assert sum("bad-model" in h for h in hits) == 3 and "good-model" in hits[-1]
+
+    llm = LLM("gemini", "k", "bad-model")
+    llm.http = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(LLMError):
+        llm.text("s", "p")
 
 
 def test_api_flow_and_tenant_isolation(tmp_path, monkeypatch):
