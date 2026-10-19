@@ -53,6 +53,23 @@ See it learn on a real free model (uses `GENAI_API_KEY` from `.env`):
 python examples/demo.py
 ```
 
+### Live demo results (2026-10-20, free `gemini-flash-latest`)
+
+One real run of `examples/demo.py`: a deliberately fiddly refund policy (proration, fee floor/cap, EU override,
+finance approval, escalation contacts, fixed reply format) and 6 hand-written graded examples. 67 LLM calls in total.
+
+| Step | Result |
+|---|---|
+| Baseline on the 6 examples (no lessons, no playbook) | **0.60** |
+| 6 practice tasks | 0.8, 1.0, 1.0, 1.0, 1.0, 0.8. The two 0.8 tasks needed revisions and produced 4 lessons, for example "Add three business days to the base payout timeline whenever a refund exceeds one thousand dollars and requires finance approval" (which the policy does say) |
+| Self-study, 3 generated questions | 1.0, 0.8, 1.0 (2 more lessons) |
+| Same 6 examples, with the learned lessons | **0.73** |
+| Candidate playbook on the same 6 examples | 0.65, so it was **not adopted** (the gate did its job) |
+
+What this run shows: the learned lessons raised the eval score from 0.60 to 0.73. A rewritten playbook did not
+help this time and was correctly rejected. One run with 6 examples and an LLM grader is noisy, so expect these
+numbers to move between runs.
+
 ## API
 
 Every call: `Authorization: Bearer <sia key>`. Calls that use a model also take
