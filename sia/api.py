@@ -1,7 +1,7 @@
 """HTTP API. Tenants authenticate with their SIA key; every LLM call uses the caller's own provider key.
 
 Auth:  Authorization: Bearer <sia api key>
-LLM:   X-LLM-Provider (gemini|anthropic|openai|groq|openrouter|...), X-LLM-Key, optional X-LLM-Model
+LLM:   X-LLM-Provider (gemini|anthropic|openai|groq|openrouter|...), X-LLM-Key, optional X-LLM-Model, X-LLM-Base-URL
 Keys sent in X-LLM-Key are used for the request only and never stored.
 """
 import os
@@ -117,7 +117,7 @@ def health():
 @app.post("/v1/tenants", status_code=201)
 def create_tenant(body: TenantIn, x_admin_key: str = Header(default="")):
     admin = os.getenv("SIA_ADMIN_KEY", "")
-    if not admin or not secrets.compare_digest(x_admin_key, admin):
+    if not admin or not secrets.compare_digest(x_admin_key.encode(), admin.encode()):
         raise HTTPException(403, "Admin key required.")
     return store.create_tenant(body.name)  # the api_key is shown only once
 
@@ -160,7 +160,8 @@ def list_knowledge(a=Depends(owned_agent)):
 
 @app.delete("/v1/agents/{agent_id}/knowledge/{doc_id}", status_code=204)
 def delete_knowledge(doc_id: str, a=Depends(owned_agent)):
-    store.delete_doc(a["id"], doc_id)
+    if not store.delete_doc(a["id"], doc_id):
+        raise HTTPException(404, "Document not found.")
 
 
 @app.post("/v1/agents/{agent_id}/examples", status_code=201)
@@ -175,7 +176,8 @@ def list_examples(a=Depends(owned_agent)):
 
 @app.delete("/v1/agents/{agent_id}/examples/{example_id}", status_code=204)
 def delete_example(example_id: int, a=Depends(owned_agent)):
-    store.delete_example(a["id"], example_id)
+    if not store.delete_example(a["id"], example_id):
+        raise HTTPException(404, "Example not found.")
 
 
 @app.post("/v1/agents/{agent_id}/run")
@@ -211,7 +213,8 @@ def list_lessons(include_inactive: bool = False, a=Depends(owned_agent)):
 def toggle_lesson(lesson_id: int, action: str, a=Depends(owned_agent)):
     if action not in ("enable", "disable"):
         raise HTTPException(404, "Use /enable or /disable.")
-    store.set_lesson_active(a["id"], lesson_id, action == "enable")
+    if not store.set_lesson_active(a["id"], lesson_id, action == "enable"):
+        raise HTTPException(404, "Lesson not found.")
     return {"id": lesson_id, "active": action == "enable"}
 
 

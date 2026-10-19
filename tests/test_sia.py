@@ -93,6 +93,16 @@ def test_no_learning_mode_is_one_call(store, agent):
     llm = FakeLLM()
     out = Agent(store, llm, agent).run("hi", learn=False)
     assert llm.calls == 1 and out["episode_id"] is None
+    assert out["critique"] is None and out["lessons_used"] == []
+
+
+def test_system_prompt_order():
+    from sia.agent import build_system
+    s = build_system({"domain": "tax", "instructions": "Be brief."}, "- play", [{"text": "lesson"}],
+                     [{"title": "doc", "text": "fact"}])
+    order = [s.index(x) for x in ("tax", "Be brief.", "- play", "lesson", "fact", "missing")]
+    assert order == sorted(order)
+    assert "missing" in build_system({"domain": "tax", "instructions": ""}, "", [], [])
 
 
 def test_feedback_correction_becomes_eval_example(store, agent):
@@ -193,5 +203,11 @@ def test_api_flow_and_tenant_isolation(tmp_path, monkeypatch):
     stats = c.get(f"/v1/agents/{aid}", headers=h1).json()["stats"]
     assert stats["episodes"] == 1 and stats["playbook_version"] == 1 and stats["active_lessons"] >= 1
     assert c.post(f"/v1/agents/{aid}/playbooks/7/activate", headers=h1).status_code == 404
+    assert c.delete(f"/v1/agents/{aid}/knowledge/nope", headers=h1).status_code == 404
+    assert c.delete(f"/v1/agents/{aid}/examples/999", headers=h1).status_code == 404
+    assert c.post(f"/v1/agents/{aid}/lessons/999/disable", headers=h1).status_code == 404
+    lid = c.get(f"/v1/agents/{aid}/lessons", headers=h1).json()[0]["id"]
+    assert c.post(f"/v1/agents/{aid}/lessons/{lid}/disable", headers=h1).json()["active"] is False
+    assert c.post(f"/v1/agents/{aid}/lessons/{lid}/disable", headers=h2).status_code == 404
     assert c.delete(f"/v1/agents/{aid}", headers=h1).status_code == 204
     assert c.get(f"/v1/agents/{aid}", headers=h1).status_code == 404

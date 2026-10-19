@@ -30,8 +30,8 @@ def build_system(agent, playbook, lessons, knowledge):
     if knowledge:
         parts.append("## Reference knowledge\n" + "\n\n".join(
             f"[{i}] ({k['title']}) {k['text']}" for i, k in enumerate(knowledge, 1)))
-        parts.append("Use the reference knowledge when relevant. If something needed is not known, say so "
-                     "instead of inventing it.")
+        parts.append("Use the reference knowledge when relevant.")
+    parts.append("If information you need is missing, say so instead of inventing it.")
     return "\n\n".join(parts)
 
 
@@ -56,6 +56,8 @@ class Agent:
                   'Return {"score": <0-10>, "issues": [<specific problems>], "suggestion": "<how to fix>"}')
         v = self.llm.json(f"You are a strict, fair senior reviewer in {self.a['domain']}. "
                           "Score harshly: 10 means nothing could be improved.", prompt)
+        if not isinstance(v, dict):
+            v = {}
         try:
             score = max(0.0, min(1.0, float(v.get("score", 0)) / 10))
         except (TypeError, ValueError):
@@ -66,7 +68,8 @@ class Agent:
         system, lessons, knowledge = self._context(task)
         answer = self.llm.text(system, task)
         if not learn:
-            return {"answer": answer, "score": None, "episode_id": None, "attempts": 1, "new_lessons": []}
+            return {"answer": answer, "score": None, "episode_id": None, "attempts": 1, "critique": None,
+                    "lessons_used": [l["text"] for l in lessons], "new_lessons": []}
 
         draft = answer
         verdict = self.critique(task, answer, knowledge, expected)
@@ -108,8 +111,9 @@ class Agent:
                                 prompt)
         except LLMError:
             return []  # learning is best-effort; never fail the user's task because reflection misfired
+        lessons = out.get("lessons") if isinstance(out, dict) else None
         saved = []
-        for text in (out.get("lessons") or [])[:3]:
+        for text in (lessons if isinstance(lessons, list) else [])[:2]:
             if isinstance(text, str) and self.store.add_lesson(self.a["id"], text, source):
                 saved.append(text.strip())
         return saved
@@ -146,6 +150,8 @@ class Agent:
                 f"SOURCE ({c['title']}):\n{c['text']}\n\nWrite one realistic task or question a user in this domain "
                 "might ask that this source answers, plus the ideal answer based strictly on the source. "
                 'Return {"question": "...", "answer": "..."}', temperature=0.8)
+            if not isinstance(qa, dict):
+                continue
             q, expected = str(qa.get("question", "")).strip(), str(qa.get("answer", "")).strip()
             if not q or not expected:
                 continue
