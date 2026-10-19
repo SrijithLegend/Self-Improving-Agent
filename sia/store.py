@@ -6,6 +6,7 @@ import secrets
 import sqlite3
 import time
 import uuid
+from contextlib import closing, contextmanager
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tenants (id TEXT PRIMARY KEY, name TEXT, key_hash TEXT UNIQUE, created REAL);
@@ -71,10 +72,13 @@ class Store:
             c.execute("PRAGMA journal_mode=WAL")
             c.executescript(SCHEMA)
 
+    @contextmanager
     def _conn(self):
-        c = sqlite3.connect(self.path, timeout=30)
-        c.row_factory = sqlite3.Row
-        return c
+        """One connection per call: commit on success, roll back on error, always close."""
+        with closing(sqlite3.connect(self.path, timeout=30)) as c:
+            c.row_factory = sqlite3.Row
+            with c:
+                yield c
 
     def q(self, sql, *args):
         with self._conn() as c:
@@ -83,6 +87,11 @@ class Store:
     def x(self, sql, *args):
         with self._conn() as c:
             return c.execute(sql, args).lastrowid
+
+    def n(self, sql, *args):
+        """Execute and return the number of rows changed."""
+        with self._conn() as c:
+            return c.execute(sql, args).rowcount
 
     # --- tenants -------------------------------------------------------------
     def create_tenant(self, name):
@@ -133,8 +142,9 @@ class Store:
 
     def delete_doc(self, agent_id, doc_id):
         with self._conn() as c:
-            c.execute("DELETE FROM docs WHERE id=? AND agent_id=?", (doc_id, agent_id))
+            found = c.execute("DELETE FROM docs WHERE id=? AND agent_id=?", (doc_id, agent_id)).rowcount
             c.execute("DELETE FROM chunks WHERE doc_id=? AND agent_id=?", (doc_id, agent_id))
+        return bool(found)
 
     def search_chunks(self, agent_id, text, k=5):
         query = fts_query(text)
@@ -203,7 +213,7 @@ class Store:
         return sorted(rows, key=lambda r: r["utility"], reverse=True)
 
     def set_lesson_active(self, agent_id, lesson_id, active):
-        self.x("UPDATE lessons SET active=? WHERE id=? AND agent_id=?", int(active), lesson_id, agent_id)
+        return bool(self.n("UPDATE lessons SET active=? WHERE id=? AND agent_id=?", int(active), lesson_id, agent_id))
 
     # --- playbooks -----------------------------------------------------------
     def active_playbook(self, agent_id):
@@ -270,7 +280,7 @@ class Store:
         return self.q(sql + (" LIMIT ?" if limit else ""), agent_id, *([limit] if limit else []))
 
     def delete_example(self, agent_id, example_id):
-        self.x("DELETE FROM examples WHERE id=? AND agent_id=?", example_id, agent_id)
+        return bool(self.n("DELETE FROM examples WHERE id=? AND agent_id=?", example_id, agent_id))
 
     # --- stats ---------------------------------------------------------------
     def stats(self, agent_id):
