@@ -276,21 +276,31 @@ def run_agent():
             # Preserve the complete model response
             history.append(candidate)
 
-            # Execute every requested function
+            # Execute every requested function exactly once
             results = []
 
             for call in calls:
-                print("\nREQUESTED TOOL:", call.name)
-                print("ARGUMENTS:", call.args)
-
+                tool_input = json_safe(call.args)
                 result = execute_tool(call.name, call.args, workspace)
 
+                log_event(
+                    run_id,
+                    "tool_call",
+                    step=step + 1,
+                    name=call.name,
+                    input=tool_input,
+                    output=json_safe(result),
+                    error=bool(result.get("is_error", False)),
+                )
+
+                print("\nREQUESTED TOOL:", call.name)
+                print("ARGUMENTS:", tool_input)
                 print("TOOL RESULT:", result)
 
                 results.append(
                     types.Part.from_function_response(
                         name=call.name,
-                        response=result
+                        response=result,
                     )
                 )
 
@@ -301,40 +311,6 @@ def run_agent():
                     parts=results
                 )
             )
-            
-            for call in calls:
-                tool_name = call.name
-                tool_input = json_safe(call.args)
-
-                result = execute_tool(
-                    tool_name,
-                    call.args,
-                    workspace,
-                )
-
-                tool_error = bool(result.get("is_error", False))
-
-                log_event(
-                    run_id,
-                    "tool_call",
-                    step=step + 1,
-                    name=tool_name,
-                    input=tool_input,
-                    output=json_safe(result),
-                    error=tool_error,
-                )
-
-                print("\nREQUESTED TOOL:", tool_name)
-                print("ARGUMENTS:", tool_input)
-                print("TOOL RESULT:", result)
-
-                results.append(
-                    types.Part.from_function_response(
-                        name=tool_name,
-                        response=result,
-                    )
-                )
-
 
         else:
             print("\nStopped: MAX_STEPS reached without a final answer.")
