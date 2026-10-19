@@ -83,7 +83,7 @@ class LLM:
         raw = self.text(system + "\nRespond with a single JSON object only.", prompt, temperature, as_json=True)
         return parse_json(raw)
 
-    def _post(self, url, headers, body, tries=5):
+    def _post(self, url, headers, body, tries=7):
         for attempt in range(tries):
             try:
                 r = self.http.post(url, headers=headers, json=body)
