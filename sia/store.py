@@ -227,9 +227,12 @@ class Store:
     def activate_playbook(self, agent_id, version):
         """Roll back/forward to a specific playbook version (0 = no playbook)."""
         with self._conn() as c:
+            if version and not c.execute("SELECT 1 FROM playbooks WHERE agent_id=? AND version=?",
+                                         (agent_id, version)).fetchone():
+                return False
             c.execute("UPDATE playbooks SET active=0 WHERE agent_id=?", (agent_id,))
-            return c.execute("UPDATE playbooks SET active=1 WHERE agent_id=? AND version=?",
-                             (agent_id, version)).rowcount or version == 0
+            c.execute("UPDATE playbooks SET active=1 WHERE agent_id=? AND version=?", (agent_id, version))
+            return True
 
     # --- episodes ------------------------------------------------------------
     def add_episode(self, agent_id, task, answer, score, critique, attempts, lesson_ids):
