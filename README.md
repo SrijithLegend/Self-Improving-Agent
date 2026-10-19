@@ -56,8 +56,12 @@ python examples/demo.py
 ## API
 
 Every call: `Authorization: Bearer <sia key>`. Calls that use a model also take
-`X-LLM-Provider` (default `gemini`), `X-LLM-Key`, and optionally `X-LLM-Model`. Provider keys are used for that
-request only and never stored.
+`X-LLM-Provider` (default `gemini`), `X-LLM-Key`, and optionally `X-LLM-Model` (a comma-separated list is a
+fallback chain) and `X-LLM-Base-URL` (self-hosted servers only). Provider keys are used for that request only and
+never stored or logged.
+
+Errors: `400` bad input or LLM config, `401` bad SIA key, `403` admin key required, `404` not found (including
+another tenant's agent), `502` the LLM provider failed.
 
 ```bash
 # helper: POSTs when -d is given, GETs otherwise
@@ -121,6 +125,24 @@ on every route, custom LLM base URLs and Ollama disabled unless `SIA_ALLOW_CUSTO
 - Postgres instead of SQLite for multiple server instances.
 - Self-grading is biased toward the model's own taste; user examples and corrections are what anchor it,
   so encourage customers to add a handful.
+
+## Default choices
+
+Choices made where the spec left room, so they are easy to find and change:
+
+| Setting | Value | Where |
+|---|---|---|
+| Default models | `gemini-flash-latest`, falling back to `gemini-flash-lite-latest` (aliases, so no retired model names) | `sia/llm.py` |
+| Retries | 7 tries for a single model, 3 per model in a chain; exponential backoff, honours `Retry-After`, capped at 60s | `sia/llm.py` |
+| "Good enough" score | 0.75 (stop revising) | `sia/agent.py` `PASS_SCORE` |
+| Revisions per run | 2 by default, 0–5 allowed | API `max_revisions` |
+| Lessons per prompt | 6 (relevant ones plus the 3 most proven) | `sia/store.py` |
+| Lesson prior / retirement | utility `(total + 0.7·2)/(uses + 2)`; retired at ≥5 uses and utility < 0.45 | `sia/store.py` |
+| Lesson dedupe | token Jaccard > 0.6 against the 5 closest lessons | `sia/store.py` |
+| Knowledge retrieval | FTS5 bm25, top 5 chunks of ~1000 chars | `sia/store.py` |
+| Playbook adoption margin | +0.02 on the eval set at temperature 0.3 | `sia/agent.py` `ADOPT_MARGIN` |
+| Improve recommended | after 10 episodes since the last improve | `stats` |
+| Database | `SIA_DB` (default `sia.db`), SQLite in WAL mode | env |
 
 ## Repo layout
 
