@@ -83,7 +83,6 @@ class Workspace:
 
         except Exception as e:
             return self._error(e)
-
     def run_tests(self):
         try:
             result = subprocess.run(
@@ -92,6 +91,7 @@ class Workspace:
                     "-m",
                     "pytest",
                     "-q",
+                    str(self.root),
                 ],
                 cwd=self.root,
                 capture_output=True,

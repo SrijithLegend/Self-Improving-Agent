@@ -1,5 +1,4 @@
-
-from task_01.something import (
+from something import (
     calculate_total,
     find_first_even,
     get_average,
