@@ -6,6 +6,10 @@ from pathlib import Path
 from workspace import Workspace
 import shutil
 import tempfile
+import json
+import time
+import uuid
+from datetime import datetime, timezone
 
 
 load_dotenv()
@@ -118,8 +122,78 @@ def create_task_copy():
         raise
 
 
+
+TRACE_FILE = Path(__file__).resolve().parent / "trace.jsonl"
+
+
+def json_safe(value):
+    """Convert SDK objects and nested values into JSON-safe data."""
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", exclude_none=False)
+
+    if isinstance(value, Path):
+        return str(value)
+
+    if isinstance(value, dict):
+        return {str(k): json_safe(v) for k, v in value.items()}
+
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    return str(value)
+
+
+def log_event(run_id, event, **fields):
+    """Append one JSON object as one line to the trace."""
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "run_id": run_id,
+        "event": event,
+        **fields,
+    }
+
+    with TRACE_FILE.open("a", encoding="utf-8") as file:
+        file.write(
+            json.dumps(
+                json_safe(record),
+                ensure_ascii=False,
+                default=str,
+            ) + "\n"
+        )
+
+
+def get_token_counts(response):
+    """Read token usage from the Gemini response, if available."""
+    usage = response.usage_metadata
+
+    if usage is None:
+        return {
+            "prompt": None,
+            "output": None,
+            "total": None,
+        }
+
+    return {
+        "prompt": usage.prompt_token_count,
+        "output": usage.candidates_token_count,
+        "total": usage.total_token_count,
+    }
+
+
 def run_agent():
     temp_dir, copied_task = create_task_copy()
+    run_id = str(uuid.uuid4())
+
+    log_event(
+        run_id,
+        "run_start",
+        task_source=str(TASK_SOURCE),
+        workspace=str(copied_task),
+        max_steps=MAX_STEPS,
+    )
 
     try:
         workspace = Workspace(copied_task)
@@ -142,16 +216,46 @@ def run_agent():
                 ]
             )
         ]
-
+        log_event(
+                run_id,
+                "initial_history",
+                messages=json_safe(history),
+            )
+        
         # 3. Agent loop
         for step in range(MAX_STEPS):
             print(f"\n--- STEP {step + 1} ---")
 
+            request_start = time.perf_counter()
+
             response = client.models.generate_content(
                 model="gemini-3.8-flash",
                 contents=history,
-                config=config
+                config=config,
             )
+
+            latency_ms = round(
+                (time.perf_counter() - request_start) * 1000,
+                2,
+            )
+
+            candidate = response.candidates[0]
+            finish_reason = candidate.finish_reason
+
+            log_event(
+                run_id,
+                "model_response",
+                step=step + 1,
+                stop_reason=getattr(
+                    finish_reason, "name", str(finish_reason)
+                ),
+                tokens=get_token_counts(response),
+                latency_ms=latency_ms,
+                content=json_safe(candidate.content),
+                response_text=response.text,
+                response=json_safe(response),
+            )
+
 
             candidate = response.candidates[0].content
             print("FINISH REASON:", response.candidates[0].finish_reason)
@@ -197,6 +301,40 @@ def run_agent():
                     parts=results
                 )
             )
+            
+            for call in calls:
+                tool_name = call.name
+                tool_input = json_safe(call.args)
+
+                result = execute_tool(
+                    tool_name,
+                    call.args,
+                    workspace,
+                )
+
+                tool_error = bool(result.get("is_error", False))
+
+                log_event(
+                    run_id,
+                    "tool_call",
+                    step=step + 1,
+                    name=tool_name,
+                    input=tool_input,
+                    output=json_safe(result),
+                    error=tool_error,
+                )
+
+                print("\nREQUESTED TOOL:", tool_name)
+                print("ARGUMENTS:", tool_input)
+                print("TOOL RESULT:", result)
+
+                results.append(
+                    types.Part.from_function_response(
+                        name=tool_name,
+                        response=result,
+                    )
+                )
+
 
         else:
             print("\nStopped: MAX_STEPS reached without a final answer.")
