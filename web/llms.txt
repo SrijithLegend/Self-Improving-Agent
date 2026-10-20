@@ -1,1 +1,21 @@
-# SIA
+# SIA: Self-Improving Agent API
+
+> A REST API for agents that learn a domain from answers, corrections and documents. What they learn is kept as readable text (lessons, a playbook, documents), not model weights. Bring your own model key; self-host with Docker.
+
+Base URL: http://localhost:8000 when self-hosted (set SIA_URL); every endpoint below is under /v1.
+Auth: Authorization: Bearer <SIA key>. Model calls also take X-LLM-Provider (default gemini; also anthropic, openai, groq, ollama, openrouter, together, mistral, deepseek), X-LLM-Key and optional X-LLM-Model. The model key is used per request and never stored.
+
+## Core endpoints
+
+- POST /v1/agents: create an agent {name, domain, instructions, rubric}
+- POST /v1/agents/{id}/knowledge: add a document {title, content}
+- POST /v1/agents/{id}/run: answer a task {task, learn?} -> {answer, score, episode_id, ...}
+- POST /v1/agents/{id}/feedback: rate or correct an answer {episode_id, rating 1-5, correction?}
+- POST /v1/agents/{id}/study: practise on generated questions {rounds}
+- POST /v1/agents/{id}/improve: propose a new playbook, adopted only with a measured win {trials, activate?}
+
+## Links
+
+- [Interactive API docs](/docs): the full OpenAPI reference
+- [This site as markdown](/agent.md): mission, how it learns, API example, results
+- [Source](https://github.com/SrijithLegend/Self-Improving-Agent)
