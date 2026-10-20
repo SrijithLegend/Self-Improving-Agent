@@ -1,160 +1,314 @@
-# SIA — Self-Improving Agent API
+<div align="center">
 
-Create an agent for **any domain** (tax advice, legal triage, support, sales, medicine notes, code review…),
-give it documents, examples and feedback, and it gets better over time — the way a person does:
-practice, get critiqued, write down what it learned, and periodically rethink how it works.
+# 🧠 SIA — Self-Improving Agent
 
-Customers bring their **own LLM key**. Defaults to Google Gemini's free tier (`gemini-flash-latest`);
-also works with Groq, OpenRouter free models, Together, Mistral, DeepSeek, OpenAI, Anthropic and local Ollama.
+**An AI assistant for any subject that gets better the more you use it.**
 
-## How it improves
+Give it your documents, a few example answers and some feedback.
+It practises, critiques itself, writes down what it learned, and keeps a change only when a test shows it helps.
 
-| Timescale | Mechanism | Signal |
+![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)
+![Free tier](https://img.shields.io/badge/runs%20on-free%20Gemini%20tier-4285F4?logo=google&logoColor=white)
+![SQLite](https://img.shields.io/badge/storage-SQLite-003B57?logo=sqlite&logoColor=white)
+
+[What it is](#-what-is-this) · [How it learns](#-how-it-learns) · [Quickstart](#-quickstart-10-minutes) · [Demo results](#-real-demo-results) · [API](#-using-the-api) · [Deploy](#-deploy)
+
+</div>
+
+---
+
+## 👋 What is this?
+
+Most AI chatbots are the same on day 100 as on day 1. **SIA is different.** It's a small server that wraps
+any large language model (LLM), such as Google Gemini, and gives it a way to **learn from experience**, a bit
+like a new employee:
+
+| A new employee... | SIA... |
+|---|---|
+| 📚 reads the company handbook | indexes the documents you upload |
+| ✍️ drafts an answer, rereads it, fixes it | writes a draft, grades it against your rubric, revises |
+| 📝 keeps notes on what worked | saves short **lessons** after every task |
+| 🧑‍🏫 listens when a manager corrects them | turns your ratings and corrections into new lessons |
+| 🔄 rethinks how they work every so often | rewrites its **playbook**, but only keeps it if a test proves it's better |
+
+You can make an agent for **any domain**: tax questions, legal triage, customer support, sales, code review...
+
+> [!NOTE]
+> SIA never retrains the model itself. Everything it learns is plain text (lessons, a playbook, your
+> documents) that you can read, edit, switch off or roll back. That's why it works with **any provider and any
+> free tier**.
+
+---
+
+## 🔁 How it learns
+
+```mermaid
+flowchart LR
+    Q[❓ Question] --> D[✍️ Draft answer]
+    D --> C{🧐 Self-critique<br/>against rubric}
+    C -- not good enough --> R[🔧 Revise]
+    R --> C
+    C -- good --> A[✅ Answer]
+    A --> L[📝 Save lessons]
+    F[👍 Your feedback] --> L
+    L --> P[📖 Improve playbook]
+    P --> T{🧪 Beats the test set?}
+    T -- yes --> K[Adopt new version]
+    T -- no --> X[Keep old version]
+```
+
+It improves on five timescales:
+
+| When | What happens | What it learns from |
 |---|---|---|
-| Within a task | Draft → self-critique against a rubric → revise (keeps the best attempt) | LLM reviewer |
-| Across tasks | Each episode is distilled into short **lessons**. Lessons used in good outcomes gain utility; ones that keep coinciding with bad outcomes are retired automatically. | Critique scores, user ratings |
-| From people | Ratings re-credit the lessons used; corrections become new lessons **and** eval examples. | Human feedback |
-| Self-study | The agent quizzes itself on its documents, grades against the source, learns from its mistakes. | Your documents |
-| Consolidation | `improve` rewrites the agent's **playbook** (strategy prompt) from lessons + failures, and adopts it **only if it scores higher on the eval set**. Every version is kept; roll back any time. | Eval set |
+| **During one answer** | Draft → self-critique → revise (keeps the best attempt) | An AI reviewer using your rubric |
+| **Across answers** | Each task is boiled down into short lessons. Lessons used in good answers gain points; ones linked to bad answers are retired automatically. | Critique scores, user ratings |
+| **From people** | Ratings re-score the lessons that were used; corrections become new lessons **and** new test examples. | Human feedback |
+| **Self-study** | It quizzes itself on your documents and grades itself against the source. | Your documents |
+| **Consolidation** | `improve` rewrites the playbook (its strategy prompt) and adopts it **only if it scores higher on the test set**. Every version is kept, so you can roll back. | Your test examples |
 
-Nothing here fine-tunes model weights — improvement lives in retrieved knowledge, lessons and a gated, versioned
-playbook. That makes it work with any provider, any model, and any free tier, and every change is inspectable.
+---
 
-## Quickstart (self-hosted)
+## 🚀 Quickstart (10 minutes)
+
+### What you need
+
+- **Python 3.12** ([download](https://www.python.org/downloads/))
+- **A free Gemini API key**: sign in at [Google AI Studio](https://aistudio.google.com/apikey) and click
+  *Create API key*. No credit card needed.
+
+### 1. Get the code
+
+```bash
+git clone https://github.com/SrijithLegend/Self-Improving-Agent.git
+cd Self-Improving-Agent
+```
+
+### 2. Create a virtual environment and install
+
+```bash
+python -m venv .venv
+```
+
+Activate it. On **Windows**:
+
+```powershell
+.venv\Scripts\activate
+```
+
+On **macOS / Linux**:
+
+```bash
+source .venv/bin/activate
+```
+
+Then install the dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
+### 3. Check it works
+
 ```bash
 python -m pytest
 ```
 
-Create a `.env`:
+All tests should pass. They don't call any real AI model, so they're free.
 
-```
-SIA_ADMIN_KEY=change-me            # needed to create customers over HTTP
-SIA_DEFAULT_LLM_KEY=<gemini key>   # optional: server-side default for gemini requests without X-LLM-Key
-```
+### 4. Add your keys
 
-```bash
-python -m sia create-tenant my-company
-```
+Create a file called `.env` in the project folder:
 
-```bash
-python -m sia serve
+```ini
+GENAI_API_KEY=your-gemini-key        # used by the demo
+SIA_ADMIN_KEY=change-me              # lets you create customers over HTTP
+SIA_DEFAULT_LLM_KEY=your-gemini-key  # optional: server default when a request has no X-LLM-Key
 ```
 
-Interactive docs: http://127.0.0.1:8000/docs
+> [!WARNING]
+> `.env` is already in `.gitignore`. Never commit your keys.
 
-See it learn on a real free model (uses `GENAI_API_KEY` from `.env`):
+### 5. Watch it learn 🎬
 
 ```bash
 python examples/demo.py
 ```
 
-### Live demo results (2026-10-20, free `gemini-flash-latest`)
+This builds a refund-policy support agent from scratch, gives it 6 practice tasks, lets it study, then tries to
+improve its playbook. Expect **10–15 minutes** on the free tier (about 100 model calls, with rate limiting).
+Add `-u` (`python -u examples/demo.py`) to see the output as it happens.
 
-Three real runs of `examples/demo.py`, each starting from an empty database: a deliberately fiddly refund policy
-(proration, fee floor/cap, EU override, finance approval, escalation contacts, fixed reply format) and
-hand-written graded examples. Runs 1 and 2 used the original eval (6 examples). Run 3 used the more reliable
-eval described below (12 examples, grading at temperature 0, adoption only for gains beyond noise, 1 trial).
+### 6. Run the server
 
-| | Run 1 | Run 2 | Run 3 (new eval) |
-|---|---|---|---|
-| Eval examples | 6 | 6 | 12 |
-| Baseline (no lessons, no playbook) | 0.60 | 0.95 | 0.62 |
-| 6 practice tasks | 0.8, 1.0, 1.0, 1.0, 1.0, 0.8 | 0.8, 1.0, 0.9, 1.0, 1.0, 0.8 | 0.8, 1.0, 0.8, 1.0, 0.9, 1.0 |
-| Self-study, 3 generated questions | 1.0, 0.8, 1.0 | 1.0, 1.0, 0.8 | 1.0, 1.0, 0.8 |
-| Same examples, with the learned lessons | 0.73 | 0.53 | 0.62 |
-| Candidate playbook | 0.65, not adopted | 0.67, adopted | 0.66, not adopted |
-| LLM calls | 67 | 67 | 100 |
+```bash
+python -m sia create-tenant my-company   # prints your SIA API key, save it
+python -m sia serve
+```
 
-**What this does and does not show.** The loop runs end to end on a free model: it revises weak answers,
-writes lessons that match the policy (for example "add three business days when a refund over $1,000 needs
-finance approval") and gates playbook changes on an eval. It does **not** yet show a reliable improvement:
+Open **http://127.0.0.1:8000/docs** for interactive docs where you can try every endpoint in the browser.
 
-- With the original eval, scores were too noisy to read. The same 6 examples scored 0.60 in one run and 0.95
-  in the other with nothing learned, and the lessons helped in run 1 (0.60 → 0.73) but hurt in run 2
-  (0.95 → 0.53). Run 2 even adopted a playbook that scored below its own baseline.
-- With the new eval (run 3), the baseline came out at 0.62, close to run 1's 0.60. The lessons made no
-  difference (0.62 → 0.62). The candidate playbook scored +0.04: that clears the old +0.02 bar, so the old
-  rule would have adopted it, but it did not beat the noise across the 12 examples, so it was refused.
+---
 
-So the new eval stops the agent from adopting changes that only look better by luck. Whether learning gives a
-repeatable gain on this demo is still open; more runs, or `DEMO_TRIALS=2` to average two answers per example,
-would answer it.
+## 📊 Real demo results
 
-Changes made after runs 1 and 2 to make the eval more reliable:
-- the grader runs at temperature 0;
-- `improve` takes `trials` (1–3): each example is answered that many times per playbook and the scores averaged;
-- a candidate is adopted only if its average gain over the same examples beats both +0.02 and one standard
-  error of the per-example gains, so a gain that is mostly noise is refused;
-- the demo now has 12 hand-checked examples (`DEMO_TRIALS=2` averages two answers per example).
+Four real runs of `examples/demo.py` on the free `gemini-flash-latest` model (2026-10-20), each starting from an
+empty database. The agent handles a deliberately tricky refund policy (proration, fee floor and cap, EU
+override, finance approval, escalation contacts, fixed reply format), scored against hand-written examples.
 
-## API
+| | Run 1 | Run 2 | Run 3 | Run 4 |
+|---|---|---|---|---|
+| Test examples | 6 (old test) | 6 (old test) | 12 (new test) | 12 (new test) |
+| 🟦 Starting score (no lessons, no playbook) | 0.60 | 0.95 | 0.62 | 0.57 |
+| 6 practice tasks | 0.8, 1.0, 1.0, 1.0, 1.0, 0.8 | 0.8, 1.0, 0.9, 1.0, 1.0, 0.8 | 0.8, 1.0, 0.8, 1.0, 0.9, 1.0 | 0.8, 0.8, 1.0, 1.0, 0.8, 0.8 |
+| Self-study (3 questions) | 1.0, 0.8, 1.0 | 1.0, 1.0, 0.8 | 1.0, 1.0, 0.8 | 1.0, 1.0, 1.0 |
+| 🟩 Same test, with learned lessons | 0.73 | 0.53 | 0.62 | **0.70** |
+| New playbook | 0.65, not adopted | 0.67, adopted | 0.66, not adopted | 0.73, not adopted |
+| Model calls | 67 | 67 | 100 | 102 |
 
-Every call: `Authorization: Bearer <sia key>`. Calls that use a model also take
-`X-LLM-Provider` (default `gemini`), `X-LLM-Key`, and optionally `X-LLM-Model` (a comma-separated list is a
-fallback chain) and `X-LLM-Base-URL` (self-hosted servers only). Provider keys are used for that request only and
-never stored or logged.
+### What this shows (and what it doesn't)
 
-Errors: `400` bad input or LLM config, `401` bad SIA key, `403` admin key required, `404` not found (including
-another tenant's agent), `502` the LLM provider failed.
+✅ **The whole loop works on a free model.** It revises weak answers, writes lessons that match the policy (for
+example *"prioritise EU withdrawal rights over usage limits"* or *"add the finance-approval days to the payout
+timeline"*), and only changes its playbook when a test says so.
+
+⚠️ **It doesn't yet prove a reliable improvement.**
+
+- **The old test was too noisy.** The same 6 examples scored 0.60 in one run and 0.95 in another with nothing
+  learned. Run 2 even adopted a playbook that scored below its own starting point.
+- **The new test is steadier.** The starting scores in runs 3 and 4 (0.62 and 0.57) are close together.
+- **Lessons helped in run 4** (0.57 → 0.70) but not in run 3 (0.62 → 0.62). Two runs can't tell a real gain from
+  luck yet.
+- **The noise check is doing its job.** Both new playbooks scored a little higher (+0.04 and +0.03) but not by
+  more than the noise, so both were refused.
+
+To settle it: run the demo a few more times, or use `DEMO_TRIALS=2` to average two answers per example.
+
+<details>
+<summary><b>What changed between the old and new test</b></summary>
+
+- The grader runs at temperature 0, so the same answer gets the same score.
+- `improve` takes `trials` (1–3): each example is answered that many times and the scores are averaged.
+- A new playbook is adopted only if its average gain beats both +0.02 **and** one standard error of the
+  per-example gains, so a gain that's mostly noise is refused.
+- The demo has 12 hand-checked examples instead of 6.
+
+</details>
+
+---
+
+## 🛠 Using the API
+
+Every request needs your SIA key: `Authorization: Bearer <sia key>`.
+
+Requests that call a model also take your **own** LLM key. It's used for that one request and never stored or
+logged:
+
+| Header | Meaning | Default |
+|---|---|---|
+| `X-LLM-Provider` | `gemini`, `groq`, `openrouter`, `together`, `mistral`, `deepseek`, `openai`, `anthropic`, `ollama` | `gemini` |
+| `X-LLM-Key` | Your provider API key | (server default) |
+| `X-LLM-Model` | Model name; a comma-separated list is a fallback chain | `gemini-flash-latest` |
+| `X-LLM-Base-URL` | Custom endpoint (self-hosted servers only) | (none) |
+
+### The whole journey in 6 steps
 
 ```bash
 # helper: POSTs when -d is given, GETs otherwise
 sia() { curl -s -H "Authorization: Bearer $SIA_KEY" -H "X-LLM-Key: $LLM_KEY" -H "Content-Type: application/json" "localhost:8000$@"; }
+```
 
-# 1. create a domain agent
+**1️⃣ Create an agent**, with its subject, its instructions and what a good answer looks like:
+
+```bash
 sia /v1/agents -d '{"name":"tax-bot","domain":"Indian personal income tax",
   "instructions":"Cite the section of the Act. Show calculations.",
   "rubric":"Correct section cited; arithmetic right; flags when a CA is needed."}'
-
-# 2. teach it: documents (chunked + full-text indexed) and graded examples
-sia /v1/agents/$ID/knowledge -d '{"title":"Section 80C","content":"..."}'
-sia /v1/agents/$ID/examples  -d '{"input":"...","expected":"..."}'
-
-# 3. use it - it critiques, revises and learns as it works
-sia /v1/agents/$ID/run -d '{"task":"Can I claim my PPF under 80C?"}'
-#   -> {answer, score, episode_id, attempts, critique, lessons_used, new_lessons, llm_calls}
-#   "learn": false gives a single fast call with no learning overhead; the episode is still recorded,
-#   so users can rate or correct fast answers too.
-#   If grading or a revision fails, you still get the best answer so far, plus "learning_error".
-
-# 4. correct it
-sia /v1/agents/$ID/feedback -d '{"episode_id":"...","rating":2,"correction":"..."}'
-
-# 5. let it study its documents, then consolidate
-sia /v1/agents/$ID/study   -d '{"rounds":5}'
-sia /v1/agents/$ID/improve -d '{"trials":2}'   # trials: answers per example, averaged (1-3)
-#   -> {adopted, old_score, new_score, active_version, playbook}
-sia /v1/agents/$ID/evaluate -d '{"trials":2}'   # score the agent as it is now; changes nothing
-
-# 6. inspect / control
-GET  /v1/agents/$ID              # stats: learning curve, lessons, playbook version, improve_recommended
-GET  /v1/agents/$ID/lessons      # POST /lessons/{id}/disable to veto a bad lesson
-GET  /v1/agents/$ID/episodes
-GET  /v1/agents/$ID/playbooks    # POST /playbooks/{version}/activate to roll back (0 = none)
-
-# 7. account
-GET  /v1/usage?days=30           # requests and LLM calls per action, for billing
-POST /v1/keys/rotate             # new API key (shown once); the old one stops working, data is kept
 ```
 
-Create customers (for your signup/billing flow): `POST /v1/tenants` with `X-Admin-Key`; the returned
+**2️⃣ Teach it** with documents (searchable) and example questions with the right answers (its test set):
+
+```bash
+sia /v1/agents/$ID/knowledge -d '{"title":"Section 80C","content":"..."}'
+sia /v1/agents/$ID/examples  -d '{"input":"...","expected":"..."}'
+```
+
+**3️⃣ Ask it something.** It critiques, revises and learns as it works:
+
+```bash
+sia /v1/agents/$ID/run -d '{"task":"Can I claim my PPF under 80C?"}'
+# -> {answer, score, episode_id, attempts, critique, lessons_used, new_lessons, llm_calls}
+```
+
+> [!TIP]
+> Add `"learn": false` for one fast model call with no learning. The answer is still saved, so users can
+> rate or correct it later. If grading fails partway, you still get the best answer so far, plus a
+> `learning_error`.
+
+**4️⃣ Correct it** when it's wrong:
+
+```bash
+sia /v1/agents/$ID/feedback -d '{"episode_id":"...","rating":2,"correction":"..."}'
+```
+
+**5️⃣ Let it study, then improve:**
+
+```bash
+sia /v1/agents/$ID/study    -d '{"rounds":5}'
+sia /v1/agents/$ID/improve  -d '{"trials":2}'   # -> {adopted, old_score, new_score, active_version, playbook}
+sia /v1/agents/$ID/evaluate -d '{"trials":2}'   # score it as it is now; changes nothing
+```
+
+**6️⃣ Inspect and control everything:**
+
+| Endpoint | What it does |
+|---|---|
+| `GET /v1/agents/$ID` | Stats: learning curve, lessons, playbook version, whether `improve` is recommended |
+| `GET /v1/agents/$ID/lessons` | List lessons. `POST /lessons/{id}/disable` vetoes a bad one |
+| `GET /v1/agents/$ID/episodes` | Every past answer |
+| `GET /v1/agents/$ID/playbooks` | Every playbook version. `POST /playbooks/{version}/activate` rolls back (`0` = none) |
+| `GET /v1/usage?days=30` | Requests and model calls per action, for billing |
+| `POST /v1/keys/rotate` | New API key (shown once). The old one stops working; your data is kept |
+
+To create customers (for your signup or billing flow), call `POST /v1/tenants` with `X-Admin-Key`. The returned
 `api_key` is shown once and stored only as a hash.
 
-## Cost per call
+<details>
+<summary><b>Error codes</b></summary>
 
-`run` with learning ≈ 3–7 model calls (answer, critique, up to 2 revise+critique, reflection).
-`improve` ≈ 1 + 4 × examples × trials. `evaluate` ≈ 2 × examples × trials. `study` ≈ 5 per round.
-Every response reports `llm_calls`, and every LLM-using request is recorded in a usage ledger
-(`GET /v1/usage`), including failed ones, since those calls still ran on the customer's key. The ledger is
-kept when an agent is deleted, so billing history survives.
-Free tiers are rate-limited; the client backs off and retries on 429.
+| Code | Meaning |
+|---|---|
+| `400` | Bad input or LLM config |
+| `401` | Bad SIA key |
+| `403` | Admin key required |
+| `404` | Not found (including another customer's agent) |
+| `429` | Rate limit hit (see `Retry-After`) |
+| `502` | The LLM provider failed |
 
-## Deploy
+</details>
+
+---
+
+## 💰 How many model calls?
+
+Every response reports `llm_calls`, so you always know what you spent.
+
+| Action | Model calls |
+|---|---|
+| `run` (with learning) | ≈ 3–7 (answer, critique, up to 2 revise + critique, reflection) |
+| `run` with `"learn": false` | 1 |
+| `improve` | ≈ 1 + 4 × examples × trials |
+| `evaluate` | ≈ 2 × examples × trials |
+| `study` | ≈ 5 per round |
+
+Every request that uses a model is recorded in a usage ledger (`GET /v1/usage`), including failed ones, because
+those calls still ran on the customer's key. The ledger survives agent deletion, so billing history is never
+lost. Free tiers are rate-limited; SIA backs off and retries automatically on `429`.
+
+---
+
+## 🐳 Deploy
 
 ```bash
 docker build -t sia .
@@ -164,49 +318,71 @@ docker build -t sia .
 docker run -p 8000:8000 -v sia-data:/data -e SIA_ADMIN_KEY=change-me sia
 ```
 
-Put it behind HTTPS. Security defaults: provider keys never persisted, tenant keys hashed, per-tenant isolation
-on every route, custom LLM base URLs and Ollama disabled unless `SIA_ALLOW_CUSTOM_BASE_URL=1` (prevents SSRF),
-customers can rotate a leaked key without losing data, and each tenant is limited to `SIA_RATE_LIMIT` requests
-per minute (default 120, `0` turns it off; over the limit returns `429` with `Retry-After`).
+Put it behind HTTPS. Secure by default:
 
-## Not built yet (add when you have paying users)
+- 🔑 Provider keys are never saved; SIA keys are stored only as hashes
+- 🧱 Every route checks that an agent belongs to the customer calling it
+- 🌐 Custom base URLs and Ollama are off unless `SIA_ALLOW_CUSTOM_BASE_URL=1` (prevents SSRF)
+- 🔄 Customers can rotate a leaked key without losing data
+- 🚦 Each customer is limited to `SIA_RATE_LIMIT` requests per minute (default 120, `0` turns it off)
 
-- Billing itself (invoices, payment provider, plans). The usage ledger is the input for it.
-- A shared rate limiter. The current one is in memory, per process, so each instance enforces its own limit.
-- Storage quotas per tenant (documents up to 2M characters each, no cap on how many).
-- Lesson poisoning: comments and corrections become lessons that go into the prompt. Ratings retire bad ones
-  over time and `/lessons/{id}/disable` lets a human veto one, but nothing screens them on the way in.
-- Background jobs for `study`/`improve` (they run synchronously; fine until a proxy timeout bites).
-- Postgres instead of SQLite for multiple server instances.
-- Self-grading is biased toward the model's own taste; user examples and corrections are what anchor it,
-  so encourage customers to add a handful.
+---
 
-## Default choices
+## ⚙️ Default settings
 
-Choices made where the spec left room, so they are easy to find and change:
+Choices made where the spec left room, so they're easy to find and change:
 
 | Setting | Value | Where |
 |---|---|---|
-| Default models | `gemini-flash-latest`, falling back to `gemini-flash-lite-latest` (aliases, so no retired model names) | `sia/llm.py` |
-| Retries | 7 tries for a single model, 3 per model in a chain; exponential backoff, honours `Retry-After`, capped at 60s | `sia/llm.py` |
+| Default models | `gemini-flash-latest`, falling back to `gemini-flash-lite-latest` | `sia/llm.py` |
+| Retries | 7 tries for one model, 3 per model in a chain; exponential backoff, honours `Retry-After`, max 60s | `sia/llm.py` |
 | "Good enough" score | 0.75 (stop revising) | `sia/agent.py` `PASS_SCORE` |
 | Revisions per run | 2 by default, 0–5 allowed | API `max_revisions` |
 | Lessons per prompt | 6 (relevant ones plus the 3 most proven) | `sia/store.py` |
-| Lesson prior / retirement | utility `(total + 0.7·2)/(uses + 2)`; retired at ≥5 uses and utility < 0.45 | `sia/store.py` |
-| Lesson dedupe | token Jaccard > 0.6 against the 5 closest lessons | `sia/store.py` |
-| Knowledge retrieval | FTS5 bm25, top 5 chunks of ~1000 chars | `sia/store.py` |
-| Playbook adoption | mean gain over the same examples must beat +0.02 and one standard error; answers at temperature 0.3, grading at 0, `trials` averaged (default 1) | `sia/agent.py` `significant_gain` |
-| Improve recommended | after 10 episodes since the last improve | `stats` |
+| Lesson scoring and retirement | utility `(total + 0.7·2)/(uses + 2)`; retired at ≥5 uses and utility < 0.45 | `sia/store.py` |
+| Duplicate lessons | token Jaccard > 0.6 against the 5 closest lessons | `sia/store.py` |
+| Document search | SQLite FTS5 (bm25), top 5 chunks of ~1000 characters | `sia/store.py` |
+| Playbook adoption | mean gain must beat +0.02 and one standard error; answers at temperature 0.3, grading at 0 | `sia/agent.py` `significant_gain` |
+| `improve` recommended | after 10 answers since the last improve | `stats` |
 | Database | `SIA_DB` (default `sia.db`), SQLite in WAL mode | env |
 
-## Repo layout
+---
+
+## 📁 Project layout
 
 ```
-sia/llm.py      provider clients (raw HTTP, retry/backoff)
-sia/store.py    SQLite + FTS5: tenants, agents, knowledge, lessons, playbooks, episodes, examples
-sia/agent.py    the learning loop: run, reflect, feedback, study, evaluate, improve
-sia/api.py      FastAPI service
-tests/          offline tests with a scripted fake LLM
-examples/demo.py  live demo on the free Gemini tier
-phase1/         earlier tool-using coding agent experiments
+sia/
+├── agent.py      # draft → critique → revise loop, study, improve
+├── api.py        # FastAPI routes
+├── llm.py        # one client for every provider, with retries and fallbacks
+├── store.py      # SQLite: agents, documents, lessons, playbooks, usage
+└── __main__.py   # CLI: create-tenant, serve
+examples/demo.py  # the live demo above
+tests/            # pytest suite (no real model calls)
+SPEC.md           # the original spec
+SIA_explained.pptx # slide deck explaining the project
 ```
+
+---
+
+## 🗺 Not built yet
+
+Planned for when there are paying users:
+
+- **Billing** (invoices, payments, plans). The usage ledger is ready to feed it.
+- **A shared rate limiter.** Today's is in memory, so each server instance enforces its own limit.
+- **Storage quotas** per customer (documents are capped at 2M characters each, but not in number).
+- **Screening lessons on the way in.** Comments and corrections become lessons that go into the prompt. Ratings
+  retire bad ones over time and humans can veto them, but nothing filters them first.
+- **Background jobs** for `study` and `improve` (they run synchronously for now).
+- **Postgres** instead of SQLite, for running several server instances.
+- **Less self-grading bias.** The model grades itself, so it favours its own taste. Your examples and corrections
+  are what keep it honest, so add a handful.
+
+<div align="center">
+
+---
+
+Made with ☕ and a lot of free-tier API calls.
+
+</div>
