@@ -62,6 +62,7 @@ code { font-family: var(--f-mono); font-size: .9em; }
 button, input { font: inherit; color: inherit; }
 button { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+[tabindex="-1"]:focus { outline: none; } /* headings focused after an in-page jump */
 [hidden] { display: none !important; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
 .skip {
@@ -227,7 +228,7 @@ section > p { max-width: 64ch; color: var(--ink-2); }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 20px 0 0; padding: 0; }
 .chips li { padding: 6px 12px; border: 1px solid var(--line); font: 400 13px var(--f-mono); color: var(--ink-2); background: var(--paper); }
 
-.code { background: var(--hero-bg); color: var(--code-ink); margin-top: 24px; }
+.code { background: var(--hero-bg); color: var(--code-ink); margin-top: 24px; border: 1px solid var(--line); }
 .code-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 8px 0 8px; border-bottom: 1px solid rgba(255, 255, 255, .08); }
 .tabs { display: flex; }
 .tabs button {
@@ -317,10 +318,11 @@ td { font-family: var(--f-mono); font-size: 15px; white-space: nowrap; }
   .drawer.open { transform: none; visibility: visible; transition: transform .25s ease; }
   .drawer-head { display: flex; align-items: center; justify-content: space-between; margin: 0 0 32px -28px; }
   .drawer-close { display: inline-flex; }
-  .backdrop { display: block; position: fixed; inset: 0; z-index: 40; background: var(--backdrop); }
+  .backdrop { display: block; position: fixed; inset: 0; z-index: 25; /* under .side (30), which holds the drawer */ background: var(--backdrop); }
   main { padding: 56px 32px 96px; max-width: 864px; }
   .foot { padding: 32px; }
   .cards { grid-template-columns: 1fr; }
+  section { scroll-margin-top: 88px; } /* clear the 64px top bar */
 }
 @media (max-width: 1023px) and (prefers-reduced-motion: reduce) { .drawer, .drawer.open { transition: none; } }
 @media (max-width: 767px) { .cards.two { grid-template-columns: 1fr; } }
@@ -340,7 +342,7 @@ td { font-family: var(--f-mono); font-size: 15px; white-space: nowrap; }
   .actions { width: 100%; }
   .ctas { flex-direction: column; }
   .btn-primary, .btn-secondary { width: 100%; }
-  .btn-label { flex: 1; padding: 0 16px; font-size: 14px; letter-spacing: .1em; }
+  .btn-label { flex: 1; padding: 0 16px; font-size: 13px; letter-spacing: .08em; white-space: nowrap; }
   .btn-secondary { justify-content: center; }
   .setup-label .long { display: none; }
   .setup-label .short { display: inline; }

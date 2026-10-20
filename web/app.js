@@ -239,11 +239,20 @@
       if (on) li.firstElementChild.setAttribute("aria-current", "location"); else li.firstElementChild.removeAttribute("aria-current");
     });
   }
+  // The observer only says *when* something crossed the band; the active section is then the last one whose top
+  // is above the band (so fast scrolls and jumps can't skip one), or the last section once the page bottom shows.
+  var foot = $(".foot");
+  function spyUpdate() {
+    if (root.getAttribute("data-view") === "agent") return;
+    var line = window.innerHeight * 0.45, current = sections[0];
+    sections.forEach(function (s) { if (s.getBoundingClientRect().top <= line) current = s; });
+    if (foot.getBoundingClientRect().bottom <= window.innerHeight + 2 && window.scrollY > 0) current = sections[sections.length - 1];
+    activate(current.id);
+  }
   if ("IntersectionObserver" in window) {
-    var spy = new IntersectionObserver(function (entries) {
-      entries.forEach(function (en) { if (en.isIntersecting) activate(en.target.id); });
-    }, { rootMargin: "-40% 0px -55% 0px" });
-    sections.forEach(function (s) { if (s) spy.observe(s); });
+    var spy = new IntersectionObserver(spyUpdate, { rootMargin: "-40% 0px -55% 0px" });
+    sections.forEach(function (s) { spy.observe(s); });
+    new IntersectionObserver(spyUpdate, { threshold: [0, 1] }).observe(foot);
   }
   activate(sections[0].id);
   // in-page links: smooth unless reduced motion (CSS handles that), move focus to the target, close the drawer
