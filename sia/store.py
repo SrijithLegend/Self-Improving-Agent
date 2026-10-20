@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS episodes (id TEXT PRIMARY KEY, agent_id TEXT, task TE
     critique TEXT, attempts INTEGER, lesson_ids TEXT, rating INTEGER, correction TEXT, created REAL);
 CREATE TABLE IF NOT EXISTS examples (id INTEGER PRIMARY KEY, agent_id TEXT, input TEXT, expected TEXT,
     source TEXT, created REAL);
+CREATE TABLE IF NOT EXISTS usage (id INTEGER PRIMARY KEY, tenant_id TEXT, agent_id TEXT, action TEXT,
+    llm_calls INTEGER, created REAL);
+CREATE INDEX IF NOT EXISTS idx_usage_tenant ON usage(tenant_id, created);
 CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_lessons_agent ON lessons(agent_id, active);
 CREATE INDEX IF NOT EXISTS idx_episodes_agent ON episodes(agent_id, created);
@@ -99,6 +102,12 @@ class Store:
         tid = uuid.uuid4().hex
         self.x("INSERT INTO tenants VALUES (?,?,?,?)", tid, name, hash_key(key), time.time())
         return {"tenant_id": tid, "name": name, "api_key": key}
+
+    def rotate_key(self, tenant_id):
+        """Issue a new API key; the old one stops working immediately. Agents and data are kept."""
+        key = "sia_" + secrets.token_urlsafe(32)
+        self.x("UPDATE tenants SET key_hash=? WHERE id=?", hash_key(key), tenant_id)
+        return {"tenant_id": tenant_id, "api_key": key}
 
     def tenant_by_key(self, key):
         rows = self.q("SELECT id, name FROM tenants WHERE key_hash=?", hash_key(key))
@@ -281,6 +290,18 @@ class Store:
 
     def delete_example(self, agent_id, example_id):
         return bool(self.n("DELETE FROM examples WHERE id=? AND agent_id=?", example_id, agent_id))
+
+    # --- usage (metering) ----------------------------------------------------
+    def record_usage(self, tenant_id, agent_id, action, llm_calls):
+        self.x("INSERT INTO usage (tenant_id, agent_id, action, llm_calls, created) VALUES (?,?,?,?,?)",
+               tenant_id, agent_id, action, llm_calls, time.time())
+
+    def usage(self, tenant_id, since=0):
+        """Requests and LLM calls per action since a timestamp; kept after agents are deleted, for billing."""
+        rows = self.q("""SELECT action, COUNT(*) requests, SUM(llm_calls) llm_calls FROM usage
+                         WHERE tenant_id=? AND created>=? GROUP BY action ORDER BY action""", tenant_id, since)
+        return {"requests": sum(r["requests"] for r in rows), "llm_calls": sum(r["llm_calls"] for r in rows),
+                "by_action": {r["action"]: {"requests": r["requests"], "llm_calls": r["llm_calls"]} for r in rows}}
 
     # --- stats ---------------------------------------------------------------
     def stats(self, agent_id):

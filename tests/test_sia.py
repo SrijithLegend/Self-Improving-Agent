@@ -242,5 +242,37 @@ def test_api_flow_and_tenant_isolation(tmp_path, monkeypatch):
     lid = c.get(f"/v1/agents/{aid}/lessons", headers=h1).json()[0]["id"]
     assert c.post(f"/v1/agents/{aid}/lessons/{lid}/disable", headers=h1).json()["active"] is False
     assert c.post(f"/v1/agents/{aid}/lessons/{lid}/disable", headers=h2).status_code == 404
+    ev = c.post(f"/v1/agents/{aid}/evaluate", json={}, headers=h1).json()
+    assert ev["score"] == 0.9 and ev["playbook_version"] == 1 and ev["llm_calls"] == 2
+    assert c.get(f"/v1/agents/{aid}", headers=h1).json()["stats"]["playbook_version"] == 1  # evaluate changes nothing
+
     assert c.delete(f"/v1/agents/{aid}", headers=h1).status_code == 204
     assert c.get(f"/v1/agents/{aid}", headers=h1).status_code == 404
+
+    # metering survives agent deletion, and is per tenant
+    used = c.get("/v1/usage", headers=h1).json()
+    assert used["requests"] == 4 and set(used["by_action"]) == {"run", "feedback", "improve", "evaluate"}
+    assert used["llm_calls"] == sum(v["llm_calls"] for v in used["by_action"].values()) > 0
+    assert c.get("/v1/usage", headers=h2).json()["requests"] == 0
+
+    # key rotation: new key works, old key is dead
+    k1b = c.post("/v1/keys/rotate", headers=h1).json()["api_key"]
+    assert c.get("/v1/agents", headers=h1).status_code == 401
+    assert c.get("/v1/agents", headers={"Authorization": f"Bearer {k1b}"}).status_code == 200
+
+
+def test_api_rate_limit(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIA_DB", str(tmp_path / "rl.db"))
+    monkeypatch.setenv("SIA_ADMIN_KEY", "admin")
+    monkeypatch.setenv("SIA_RATE_LIMIT", "3")
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    import sia.api
+    api = importlib.reload(sia.api)
+    c = TestClient(api.app)
+    h = {"Authorization": "Bearer " + c.post("/v1/tenants", json={"name": "a"},
+                                              headers={"X-Admin-Key": "admin"}).json()["api_key"]}
+    assert [c.get("/v1/agents", headers=h).status_code for _ in range(4)] == [200, 200, 200, 429]
+    assert int(c.get("/v1/agents", headers=h).headers["Retry-After"]) > 0

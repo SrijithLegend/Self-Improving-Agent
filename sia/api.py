@@ -6,8 +6,11 @@ Keys sent in X-LLM-Key are used for the request only and never stored.
 """
 import os
 import secrets
+import threading
+import time
+from collections import defaultdict, deque
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .agent import Agent
@@ -18,6 +21,9 @@ app = FastAPI(title="Self-Improving Agent API", version="1.0.0",
               description="Create domain agents that improve from experience, feedback and documents. "
                           "Bring your own LLM key.")
 store = Store(os.getenv("SIA_DB", "sia.db"))
+# ponytail: in-memory per-process limiter; move to Redis/Postgres when running several instances.
+RATE_LIMIT = int(os.getenv("SIA_RATE_LIMIT", "120"))  # requests per tenant per minute; 0 = unlimited
+_hits, _hits_lock = defaultdict(deque), threading.Lock()
 
 
 # --- dependencies ------------------------------------------------------------
@@ -26,6 +32,15 @@ def tenant(authorization: str = Header(default="")):
     t = store.tenant_by_key(key) if key else None
     if not t:
         raise HTTPException(401, "Invalid or missing API key (Authorization: Bearer <key>).")
+    if RATE_LIMIT:
+        now = time.monotonic()
+        with _hits_lock:
+            q = _hits[t["id"]]
+            while q and now - q[0] > 60:
+                q.popleft()
+            if len(q) >= RATE_LIMIT:
+                raise HTTPException(429, "Rate limit exceeded.", headers={"Retry-After": str(int(61 - (now - q[0])))})
+            q.append(now)
     return t
 
 
@@ -44,6 +59,14 @@ def owned_agent(agent_id: str, t=Depends(tenant)):
     if not a:
         raise HTTPException(404, "Agent not found.")
     return a
+
+
+def metered(request: Request, a, model, fn, *args):
+    """Run an LLM-using action, record its LLM calls for billing (even if it fails), add llm_calls."""
+    try:
+        return {**call(fn, *args), "llm_calls": model.calls}
+    finally:
+        store.record_usage(a["tenant_id"], a["id"], request.url.path.rsplit("/", 1)[-1], model.calls)
 
 
 def call(fn, *args, **kwargs):
@@ -104,6 +127,11 @@ class StudyIn(BaseModel):
     rounds: int = Field(3, ge=1, le=20)
 
 
+class EvaluateIn(BaseModel):
+    max_examples: int = Field(8, ge=1, le=30)
+    trials: int = Field(1, ge=1, le=3)
+
+
 class ImproveIn(BaseModel):
     max_examples: int = Field(8, ge=1, le=30)
     trials: int = Field(1, ge=1, le=3, description="Answers per example and playbook, averaged; more = less noise.")
@@ -121,6 +149,17 @@ def create_tenant(body: TenantIn, x_admin_key: str = Header(default="")):
     if not admin or not secrets.compare_digest(x_admin_key.encode(), admin.encode()):
         raise HTTPException(403, "Admin key required.")
     return store.create_tenant(body.name)  # the api_key is shown only once
+
+
+@app.post("/v1/keys/rotate")
+def rotate_key(t=Depends(tenant)):
+    return store.rotate_key(t["id"])  # the new api_key is shown only once; the old one stops working now
+
+
+@app.get("/v1/usage")
+def usage(days: int = 30, t=Depends(tenant)):
+    days = min(max(days, 1), 366)
+    return {"days": days, **store.usage(t["id"], time.time() - days * 86400)}
 
 
 @app.post("/v1/agents", status_code=201)
@@ -182,27 +221,41 @@ def delete_example(example_id: int, a=Depends(owned_agent)):
 
 
 @app.post("/v1/agents/{agent_id}/run")
-def run(body: RunIn, a=Depends(owned_agent), model=Depends(llm)):
-    out = call(Agent(store, model, a).run, body.task, body.learn, body.max_revisions)
-    return {**out, "llm_calls": model.calls}
+def run(body: RunIn, request: Request, a=Depends(owned_agent), model=Depends(llm)):
+    return metered(request, a, model, Agent(store, model, a).run, body.task, body.learn, body.max_revisions)
 
 
 @app.post("/v1/agents/{agent_id}/feedback")
-def feedback(body: FeedbackIn, a=Depends(owned_agent), model=Depends(llm)):
-    out = call(Agent(store, model, a).feedback, body.episode_id, body.rating, body.correction, body.comment)
-    return {**out, "llm_calls": model.calls}
+def feedback(body: FeedbackIn, request: Request, a=Depends(owned_agent), model=Depends(llm)):
+    return metered(request, a, model, Agent(store, model, a).feedback,
+                   body.episode_id, body.rating, body.correction, body.comment)
 
 
 # ponytail: study/improve run synchronously (can take minutes on rate-limited free tiers);
 # move to a job queue + polling endpoint if requests start hitting proxy timeouts.
 @app.post("/v1/agents/{agent_id}/study")
-def study(body: StudyIn, a=Depends(owned_agent), model=Depends(llm)):
-    return {**call(Agent(store, model, a).study, body.rounds), "llm_calls": model.calls}
+def study(body: StudyIn, request: Request, a=Depends(owned_agent), model=Depends(llm)):
+    return metered(request, a, model, Agent(store, model, a).study, body.rounds)
+
+
+@app.post("/v1/agents/{agent_id}/evaluate")
+def evaluate(body: EvaluateIn, request: Request, a=Depends(owned_agent), model=Depends(llm)):
+    """Score the agent as it is now on its eval set, without changing anything."""
+    def score():
+        examples = store.examples(a["id"], body.max_examples)
+        if not examples:
+            raise ValueError("No eval examples. Add examples, give feedback with corrections, or run study first.")
+        pb = store.active_playbook(a["id"])
+        scores = Agent(store, model, a).scores(pb["content"], examples, body.trials)
+        return {"score": round(sum(scores) / len(scores), 3), "playbook_version": pb["version"],
+                "trials": body.trials, "examples": [{"id": e["id"], "source": e["source"], "score": round(x, 3)}
+                                                    for e, x in zip(examples, scores)]}
+    return metered(request, a, model, score)
 
 
 @app.post("/v1/agents/{agent_id}/improve")
-def improve(body: ImproveIn, a=Depends(owned_agent), model=Depends(llm)):
-    return {**call(Agent(store, model, a).improve, body.max_examples, body.trials), "llm_calls": model.calls}
+def improve(body: ImproveIn, request: Request, a=Depends(owned_agent), model=Depends(llm)):
+    return metered(request, a, model, Agent(store, model, a).improve, body.max_examples, body.trials)
 
 
 @app.get("/v1/agents/{agent_id}/lessons")
