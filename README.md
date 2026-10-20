@@ -108,7 +108,9 @@ sia /v1/agents/$ID/examples  -d '{"input":"...","expected":"..."}'
 # 3. use it - it critiques, revises and learns as it works
 sia /v1/agents/$ID/run -d '{"task":"Can I claim my PPF under 80C?"}'
 #   -> {answer, score, episode_id, attempts, critique, lessons_used, new_lessons, llm_calls}
-#   "learn": false gives a single fast call with no learning overhead
+#   "learn": false gives a single fast call with no learning overhead; the episode is still recorded,
+#   so users can rate or correct fast answers too.
+#   If grading or a revision fails, you still get the best answer so far, plus "learning_error".
 
 # 4. correct it
 sia /v1/agents/$ID/feedback -d '{"episode_id":"...","rating":2,"correction":"..."}'
@@ -117,12 +119,17 @@ sia /v1/agents/$ID/feedback -d '{"episode_id":"...","rating":2,"correction":"...
 sia /v1/agents/$ID/study   -d '{"rounds":5}'
 sia /v1/agents/$ID/improve -d '{"trials":2}'   # trials: answers per example, averaged (1-3)
 #   -> {adopted, old_score, new_score, active_version, playbook}
+sia /v1/agents/$ID/evaluate -d '{"trials":2}'   # score the agent as it is now; changes nothing
 
 # 6. inspect / control
 GET  /v1/agents/$ID              # stats: learning curve, lessons, playbook version, improve_recommended
 GET  /v1/agents/$ID/lessons      # POST /lessons/{id}/disable to veto a bad lesson
 GET  /v1/agents/$ID/episodes
 GET  /v1/agents/$ID/playbooks    # POST /playbooks/{version}/activate to roll back (0 = none)
+
+# 7. account
+GET  /v1/usage?days=30           # requests and LLM calls per action, for billing
+POST /v1/keys/rotate             # new API key (shown once); the old one stops working, data is kept
 ```
 
 Create customers (for your signup/billing flow): `POST /v1/tenants` with `X-Admin-Key`; the returned
@@ -131,7 +138,10 @@ Create customers (for your signup/billing flow): `POST /v1/tenants` with `X-Admi
 ## Cost per call
 
 `run` with learning ≈ 3–7 model calls (answer, critique, up to 2 revise+critique, reflection).
-`improve` ≈ 1 + 4 × examples × trials. `study` ≈ 5 per round. Every response reports `llm_calls` for metering.
+`improve` ≈ 1 + 4 × examples × trials. `evaluate` ≈ 2 × examples × trials. `study` ≈ 5 per round.
+Every response reports `llm_calls`, and every LLM-using request is recorded in a usage ledger
+(`GET /v1/usage`), including failed ones, since those calls still ran on the customer's key. The ledger is
+kept when an agent is deleted, so billing history survives.
 Free tiers are rate-limited; the client backs off and retries on 429.
 
 ## Deploy
@@ -145,11 +155,17 @@ docker run -p 8000:8000 -v sia-data:/data -e SIA_ADMIN_KEY=change-me sia
 ```
 
 Put it behind HTTPS. Security defaults: provider keys never persisted, tenant keys hashed, per-tenant isolation
-on every route, custom LLM base URLs and Ollama disabled unless `SIA_ALLOW_CUSTOM_BASE_URL=1` (prevents SSRF).
+on every route, custom LLM base URLs and Ollama disabled unless `SIA_ALLOW_CUSTOM_BASE_URL=1` (prevents SSRF),
+customers can rotate a leaked key without losing data, and each tenant is limited to `SIA_RATE_LIMIT` requests
+per minute (default 120, `0` turns it off; over the limit returns `429` with `Retry-After`).
 
 ## Not built yet (add when you have paying users)
 
-- Billing and per-tenant rate limits — `llm_calls` per response is the metering hook.
+- Billing itself (invoices, payment provider, plans). The usage ledger is the input for it.
+- A shared rate limiter. The current one is in memory, per process, so each instance enforces its own limit.
+- Storage quotas per tenant (documents up to 2M characters each, no cap on how many).
+- Lesson poisoning: comments and corrections become lessons that go into the prompt. Ratings retire bad ones
+  over time and `/lessons/{id}/disable` lets a human veto one, but nothing screens them on the way in.
 - Background jobs for `study`/`improve` (they run synchronously; fine until a proxy timeout bites).
 - Postgres instead of SQLite for multiple server instances.
 - Self-grading is biased toward the model's own taste; user examples and corrections are what anchor it,
