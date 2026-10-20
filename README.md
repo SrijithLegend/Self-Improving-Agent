@@ -306,7 +306,7 @@ sia serve --host 0.0.0.0        # or: docker build -t sia . && docker run -p 800
 sia create-org my-company       # prints a full-scope key, shown once
 ```
 
-Interactive API docs: `http://localhost:8000/docs`. Then point the SDK at it:
+Landing page: `http://localhost:8000/`. Interactive API docs: `http://localhost:8000/docs`. Then point the SDK at it:
 
 ```python
 sia = SIAClient(api_key="sia_...", project="my-ai-agent", base_url="https://sia.example.com")
@@ -499,14 +499,15 @@ sia_devtools/          # the SDK and CLI (pip package "sia-devtools", command "s
 └── errors.py          # one exception family, same in local and hosted mode
 sia/                   # the server
 ├── api.py             # FastAPI: auth, scopes, plans, DevTools routes, managed agents routes
-├── dashboard.html     # the dashboard (single static page, no build step)
+├── dashboard.html     # the dashboard at /dashboard (single static page, no build step)
 ├── store.py           # organizations, keys, plans, payments, usage, managed agents
 ├── billing.py         # Razorpay orders, signature and webhook checks
 ├── agent.py           # the original self-improvement engine
 └── llm.py             # one HTTP client for 9 LLM providers
+web/                        # landing page served at / (static, no build step; see web/README.md)
 examples/devtools_demo.py   # the end-to-end demo above
 examples/ci/sia-gate.yml    # GitHub Actions gate example
 examples/demo.py            # the original managed-agent demo
-tests/                      # 50 offline tests (no API keys)
+tests/                      # 51 offline tests (no API keys)
 docs/AUDIT.md               # audit, what was built, readiness assessment
 ```
