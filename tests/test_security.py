@@ -102,6 +102,7 @@ def test_security_headers(tmp_path, monkeypatch):
     assert "unsafe-inline" not in script_src and "frame-ancestors 'none'" in csp
     dash = c.get("/dashboard").headers["content-security-policy"]
     assert "unsafe-inline" not in re.search(r"script-src ([^;]+)", dash).group(1)
+    assert "https://fonts.gstatic.com" in dash  # the dashboard uses the landing page's web fonts
     me = c.get("/v1/me")
     assert me.headers["cache-control"] == "no-store" and me.headers["content-security-policy"] == sec.API_CSP
     for name in ("x-content-type-options", "x-frame-options", "referrer-policy", "permissions-policy",

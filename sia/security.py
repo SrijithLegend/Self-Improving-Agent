@@ -179,7 +179,8 @@ def dashboard_csp(dashboard_html):
     # Razorpay's checkout script and payment window are the only third-party code the dashboard may load
     return ("default-src 'self'; script-src 'self' " + inline_script_hashes(dashboard_html) +
             " https://checkout.razorpay.com https://*.razorpay.com; frame-src https://*.razorpay.com; "
-            "connect-src 'self' https://*.razorpay.com; style-src 'self' 'unsafe-inline'; "
+            "connect-src 'self' https://*.razorpay.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src https://fonts.gstatic.com; "
             "img-src 'self' data: https://*.razorpay.com; frame-ancestors 'none'; base-uri 'none'; "
             "form-action 'self' https://*.razorpay.com; object-src 'none'")
 
