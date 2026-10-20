@@ -76,7 +76,27 @@ EXAMPLES = [
     ("Annual plan, $365, bought 150 days ago. Customer for 1 year, paid with PayPal. How much is my refund?",
      "DECISION: PARTIAL REFUND\nAMOUNT: $165.00\nCALCULATION: 365 x 215/365 = 215.00; fee 20% = 43, raised to the "
      "$50 minimum; 215.00 - 50 = 165.00\nPAYOUT: PayPal, 5-7 business days\nESCALATION: billing-appeals@acme.example"),
+    ("US customer, monthly plan $29, charged 3 days ago, used 12 GB, paid by card. Refund?",
+     "DECISION: FULL REFUND\nAMOUNT: $29.00\nCALCULATION: n/a - within 7 days and under 20 GB\n"
+     "PAYOUT: original card, 5-7 business days\nESCALATION: none"),
+    ("I'm in Spain, monthly plan $49 paid with PayPal, charged 12 days ago, used 60 GB. Can I get a refund?",
+     "DECISION: FULL REFUND\nAMOUNT: $49.00\nCALCULATION: n/a - EU 14-day withdrawal right overrides the 7-day "
+     "window and usage limit\nPAYOUT: PayPal, 5-7 business days\nESCALATION: none"),
+    ("I'm in Italy on the monthly plan, charged 20 days ago, used 2 GB. Refund please.",
+     "DECISION: NO REFUND\nAMOUNT: $0.00\nCALCULATION: n/a - past both the 7-day window and the EU 14-day right\n"
+     "PAYOUT: none\nESCALATION: billing-appeals@acme.example"),
+    ("Annual plan, $1,825, bought 10 days ago with PayPal. Customer for 1 year. I want a refund.",
+     "DECISION: FULL REFUND\nAMOUNT: $1825.00\nCALCULATION: n/a - within 30 days\n"
+     "PAYOUT: PayPal, pending finance approval, 8-10 business days\nESCALATION: none"),
+    ("Annual plan $730 bought 100 days ago, card, customer for 2 years. Cancel and refund.",
+     "DECISION: PARTIAL REFUND\nAMOUNT: $424.00\nCALCULATION: 730 x 265/365 = 530.00; fee 20% = 106.00; "
+     "530.00 - 106.00 = 424.00\nPAYOUT: original card, 5-7 business days\nESCALATION: billing-appeals@acme.example"),
+    ("We pay by invoice. Annual plan $1,095, bought exactly 31 days ago; Acme customer for 6 years. Cancel please.",
+     "DECISION: PARTIAL REFUND\nAMOUNT: $1002.00\nCALCULATION: 1095 x 334/365 = 1002.00; fee waived (3+ years)\n"
+     "PAYOUT: credit note, pending finance approval, within 13 business days\n"
+     "ESCALATION: billing-appeals@acme.example"),
 ]
+TRIALS = int(os.getenv("DEMO_TRIALS", "1"))  # answers per eval example, averaged; 2 halves the noise, doubles the calls
 TASKS = [
     "Annual plan, $2,190, bought 90 days ago. I've been with you 2 years, paid by card. Cancel and refund please.",
     "I'm in France, monthly plan $29, charged 5 days ago, used 25 GB. Refund?",
@@ -97,7 +117,7 @@ for q, a in EXAMPLES:
     store.add_example(record["id"], q, a, "user")
 
 print(f"model: {llm.model}")
-print(f"baseline eval score (no lessons, no playbook): {agent.evaluate('', store.examples(record['id'])):.2f}")
+print(f"baseline eval score (no lessons, no playbook): {agent.evaluate('', store.examples(record['id']), TRIALS):.2f}")
 
 for task in TASKS:
     r = agent.run(task)
@@ -107,7 +127,7 @@ s = agent.study(rounds=3)
 print(f"\nstudied {s['studied']} self-generated questions: {[x['score'] for x in s['results']]}")
 
 # Eval on the hand-written examples only (user examples sort first); study's synthetic ones are unverified.
-imp = agent.improve(max_examples=len(EXAMPLES))
+imp = agent.improve(max_examples=len(EXAMPLES), trials=TRIALS)
 print(f"\nimprove (both sides use the learned lessons): {imp['old_score']:.2f} -> {imp['new_score']:.2f}  "
       f"adopted={imp['adopted']}")
 print("playbook:\n" + imp["playbook"])
