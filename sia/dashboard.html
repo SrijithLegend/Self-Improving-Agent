@@ -199,6 +199,21 @@ label input[type="checkbox"] { margin-right: 8px; accent-color: var(--accent); }
 .callout { border-left: 3px solid var(--accent); background: var(--accent-soft); color: var(--ink); padding: 13px 15px; margin-bottom: 16px; }
 .callout.bad { border-color: var(--bad); background: var(--bad-bg); }
 details > summary { cursor: pointer; font-weight: 600; }
+/* dialogs (replace the browser's prompt and confirm boxes) */
+.dlg { border: 1px solid var(--line); background: var(--surface); color: var(--ink); padding: 0; width: min(480px, calc(100vw - 32px));
+       max-width: none; animation: rise .16s ease-out; }
+.dlg::backdrop { background: rgba(14, 27, 42, .45); }
+.dlg form { padding: 28px; position: relative; }
+.dlg form::before, .dlg form::after { content: ""; position: absolute; width: 10px; height: 10px; pointer-events: none; }
+.dlg form::before { top: 6px; left: 6px; border-top: 2px solid var(--signal); border-left: 2px solid var(--signal); }
+.dlg form::after { bottom: 6px; right: 6px; border-bottom: 2px solid var(--signal); border-right: 2px solid var(--signal); }
+.dlg h2 { margin: 0 0 8px; }
+.dlg input, .dlg textarea { width: 100%; }
+.dlg textarea { min-height: 140px; }
+.dlg .dlg-acts { justify-content: flex-end; margin-top: 24px; }
+button.danger-fill { background: var(--bad); border-color: var(--bad); color: var(--paper); }
+button.danger-fill:hover { background: var(--bad); border-color: var(--bad); filter: brightness(1.1); }
+@media (prefers-reduced-motion: reduce) { .dlg { animation: none; } }
 
 @media (max-width: 1100px) { main { padding: 36px 28px 64px; } }
 @media (max-width: 860px) {
@@ -245,6 +260,25 @@ const theme = () => document.documentElement.getAttribute("data-theme") || "syst
 const themeSwitch = () => `<div class="theme" role="group" aria-label="Theme">${THEMES.map(([v, l]) =>
   `<button type="button" data-act="theme" data-t="${v}" aria-pressed="${theme() === v}">${l}</button>`).join("")}</div>`;
 try { const t = localStorage.getItem("sia-theme"); if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t); } catch (e) {}
+
+// In-page replacement for the browser prompt and confirm boxes. Resolves to the typed text (or true), or null when cancelled.
+function ask({ title, body = "", input = null, multiline = false, value = "", ok = "OK", danger = false }) {
+  return new Promise((resolve) => {
+    const d = document.createElement("dialog"); d.className = "dlg"; d.setAttribute("aria-labelledby", "dlg-t");
+    const field = input === null ? "" : `<label for="dlg-in">${esc(input)}</label>` + (multiline
+      ? `<textarea id="dlg-in" name="v" autofocus>${esc(value)}</textarea>`
+      : `<input id="dlg-in" name="v" value="${esc(value)}" autocomplete="off" required autofocus>`);
+    d.innerHTML = `<form method="dialog"><h2 id="dlg-t">${esc(title)}</h2>${body ? `<p class="sub">${esc(body)}</p>` : ""}${field}
+      <div class="row dlg-acts"><button type="button" data-close>Cancel</button>
+      <button value="ok" class="${danger ? "danger-fill" : "primary"}">${esc(ok)}</button></div></form>`;
+    d.addEventListener("click", (e) => { if (e.target === d || e.target.closest("[data-close]")) d.close(); });  // backdrop, Cancel
+    d.addEventListener("close", () => {
+      const v = d.returnValue === "ok" ? (input === null ? true : d.querySelector("[name=v]").value) : null;
+      d.remove(); resolve(v);
+    });
+    document.body.appendChild(d); d.showModal();
+  });
+}
 
 function toast(msg) {
   const t = document.createElement("div"); t.className = "toast"; t.textContent = msg;
@@ -303,7 +337,8 @@ function shell(view, body) {
   </nav><main>${body}</main></div>`;
   $("#proj").onchange = async (e) => {
     if (e.target.value === "__new") {
-      const name = prompt("Project name (letters, digits, - _ .)"); if (!name) return route();
+      const name = await ask({ title: "New project", body: "Letters, digits, - _ and . only.", input: "Project name", ok: "Create project" });
+      if (!name) return route();
       try { const p = await api("/projects", { body: { name } }); await loadProjects(); selectProject(p.id); } catch (err) { toast(err.message); route(); }
     } else selectProject(e.target.value);
   };
@@ -743,17 +778,18 @@ const ACTS = {
   },
   async exportRuns() { await download(P() + "/runs/export", "runs.jsonl"); },
   async dl(d) { await download(d.path, d.file); },
-  async delex(d) { if (!confirm("Delete this example? Earlier versions keep it.")) return; await api(`${P()}/datasets/${d.ds}/examples/${d.ex}`, { method: "DELETE" }); route(); },
+  async delex(d) { if (!await ask({ title: "Delete this example?", body: "New versions of the dataset won't include it. Earlier versions keep it.", ok: "Delete", danger: true })) return; await api(`${P()}/datasets/${d.ds}/examples/${d.ex}`, { method: "DELETE" }); route(); },
   async editex(d) {
     const ds = await api(`${P()}/datasets/${d.ds}`); const ex = ds.examples.find((e) => String(e.id) === d.ex);
-    const v = prompt("New expected output (JSON or text):", typeof ex.expected_output === "string" ? ex.expected_output : JSON.stringify(ex.expected_output));
+    const v = await ask({ title: "Edit expected output", body: "JSON or plain text. Saving creates a new dataset version.", input: "Expected output",
+      multiline: true, value: typeof ex.expected_output === "string" ? ex.expected_output : JSON.stringify(ex.expected_output, null, 2), ok: "Save" });
     if (v === null) return;
     await api(`${P()}/datasets/${d.ds}/examples/${d.ex}`, { method: "PUT", body: { expected_output: parse(v) } }); toast("Saved as a new version."); route();
   },
   async activate(d) { await api(`${P()}/versions/${encodeURIComponent(d.name)}/${d.v}/activate`, { body: {} }); toast("Activated."); route(); },
-  async revoke(d) { if (!confirm("Revoke this key? Apps using it will stop sending data.")) return; await api(`/keys/${d.id}/revoke`, { body: {} }); route(); },
+  async revoke(d) { if (!await ask({ title: "Revoke this key?", body: "Apps using it stop sending data right away. This can't be undone.", ok: "Revoke key", danger: true })) return; await api(`/keys/${d.id}/revoke`, { body: {} }); route(); },
   async rotate() {
-    if (!confirm("Rotate the key you are signed in with? The old one stops working immediately.")) return;
+    if (!await ask({ title: "Rotate your key?", body: "The key you're signed in with stops working immediately. The new one is shown once.", ok: "Rotate key", danger: true })) return;
     const k = await api("/keys/rotate", { body: {} }); S.key = k.api_key; try { sessionStorage.setItem("sia_key", S.key); } catch (e) {}
     S.me = await api("/me"); await route(); $("#newkey").innerHTML = `<p><b>Your new key (shown once):</b></p><pre>${esc(k.api_key)}</pre>`;
   },
