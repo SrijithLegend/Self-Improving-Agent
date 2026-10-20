@@ -8,11 +8,14 @@ An agent improves the way a person does, at three timescales:
                        lessons and failures, and adopt it ONLY if it scores higher on a held eval set (improve).
 Learning signals: self-critique, human feedback/corrections, and self-study on supplied documents.
 """
+from statistics import mean, stdev
+
 from .llm import LLMError
 from .store import Store
 
 PASS_SCORE = 0.75          # critique score (0..1) that counts as "good enough"
-ADOPT_MARGIN = 0.02        # a new playbook must beat the current one by this much on the eval set
+ADOPT_MARGIN = 0.02        # a new playbook must beat the current one by this much on the eval set...
+                           # ...and by more than the noise (one standard error of the per-example gains)
 
 DEFAULT_RUBRIC = ("Correctness and factual accuracy; completeness for what was asked; "
                   "grounded in the reference knowledge when relevant (no invented facts); "
@@ -55,7 +58,7 @@ class Agent:
                   + f"RUBRIC:\n{self.a['rubric'] or DEFAULT_RUBRIC}\n\n"
                   'Return {"score": <0-10>, "issues": [<specific problems>], "suggestion": "<how to fix>"}')
         v = self.llm.json(f"You are a strict, fair senior reviewer in {self.a['domain']}. "
-                          "Score harshly: 10 means nothing could be improved.", prompt)
+                          "Score harshly: 10 means nothing could be improved.", prompt, temperature=0)
         if not isinstance(v, dict):
             v = {}
         try:
@@ -161,15 +164,22 @@ class Agent:
         return {"studied": len(results), "results": results}
 
     # --- 3. consolidation ----------------------------------------------------
-    def evaluate(self, playbook, examples):
-        scores = []
+    def scores(self, playbook, examples, trials=1):
+        """Per-example score with this playbook, averaged over `trials` answers (grading is at temperature 0)."""
+        out = []
         for ex in examples:
             system, _, knowledge = self._context(ex["input"], playbook=playbook)
-            answer = self.llm.text(system, ex["input"], temperature=0.3)
-            scores.append(self.critique(ex["input"], answer, knowledge, ex["expected"])["score"])
-        return sum(scores) / len(scores)
+            runs = []
+            for _ in range(trials):
+                answer = self.llm.text(system, ex["input"], temperature=0.3)
+                runs.append(self.critique(ex["input"], answer, knowledge, ex["expected"])["score"])
+            out.append(mean(runs))
+        return out
 
-    def improve(self, max_examples=8):
+    def evaluate(self, playbook, examples, trials=1):
+        return mean(self.scores(playbook, examples, trials))
+
+    def improve(self, max_examples=8, trials=1):
         examples = self.store.examples(self.a["id"], max_examples)
         if not examples:
             raise ValueError("No eval examples. Add examples, give feedback with corrections, or run study first.")
@@ -189,9 +199,10 @@ class Agent:
             "under 350 words) that consolidates the lessons, fixes the failure patterns and keeps what already "
             "works. Output only the playbook.", temperature=0.5).strip()
 
-        old_score = self.evaluate(current["content"], examples)
-        new_score = self.evaluate(candidate, examples)
-        adopted = new_score > old_score + ADOPT_MARGIN
+        old = self.scores(current["content"], examples, trials)
+        new = self.scores(candidate, examples, trials)
+        old_score, new_score = mean(old), mean(new)
+        adopted = significant_gain(old, new)
         version = self.store.add_playbook(self.a["id"], candidate, round(new_score, 3), adopted,
                                           note=f"baseline {old_score:.3f} on {len(examples)} examples")
         if not adopted and current["version"]:
@@ -199,4 +210,11 @@ class Agent:
             self.store.x("UPDATE playbooks SET score=? WHERE agent_id=? AND active=1", round(old_score, 3), self.a["id"])
         return {"adopted": adopted, "old_score": round(old_score, 3), "new_score": round(new_score, 3),
                 "candidate_version": version, "active_version": version if adopted else current["version"],
-                "eval_examples": len(examples), "playbook": candidate}
+                "eval_examples": len(examples), "trials": trials, "playbook": candidate}
+
+
+def significant_gain(old, new):
+    """Paired comparison on the same examples: the mean gain must clear ADOPT_MARGIN and one standard error."""
+    gains = [n - o for o, n in zip(old, new)]
+    noise = stdev(gains) / len(gains) ** 0.5 if len(gains) > 1 else 0.0
+    return mean(gains) > max(ADOPT_MARGIN, noise)

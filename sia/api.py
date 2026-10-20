@@ -106,6 +106,7 @@ class StudyIn(BaseModel):
 
 class ImproveIn(BaseModel):
     max_examples: int = Field(8, ge=1, le=30)
+    trials: int = Field(1, ge=1, le=3, description="Answers per example and playbook, averaged; more = less noise.")
 
 
 # --- routes ------------------------------------------------------------------
@@ -201,7 +202,7 @@ def study(body: StudyIn, a=Depends(owned_agent), model=Depends(llm)):
 
 @app.post("/v1/agents/{agent_id}/improve")
 def improve(body: ImproveIn, a=Depends(owned_agent), model=Depends(llm)):
-    return {**call(Agent(store, model, a).improve, body.max_examples), "llm_calls": model.calls}
+    return {**call(Agent(store, model, a).improve, body.max_examples, body.trials), "llm_calls": model.calls}
 
 
 @app.get("/v1/agents/{agent_id}/lessons")

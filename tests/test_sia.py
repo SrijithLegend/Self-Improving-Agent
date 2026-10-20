@@ -137,6 +137,20 @@ def test_study_and_gated_improve(store, agent):
     assert store.activate_playbook(agent["id"], 0) and store.active_playbook(agent["id"])["version"] == 0
 
 
+def test_adoption_needs_gain_beyond_noise(store, agent):
+    from sia.agent import significant_gain
+    assert significant_gain([0.4, 0.4, 0.4], [0.9, 0.9, 0.9])          # consistent gain
+    assert not significant_gain([0.5, 0.5], [0.5, 0.5])                # equal
+    assert not significant_gain([0.5, 0.5], [0.51, 0.52])              # below the margin
+    assert not significant_gain([0.5, 0.5, 0.5, 0.5], [1.0, 0.0, 1.0, 0.2])  # +0.05 on average, but pure noise
+
+    llm = FakeLLM()
+    store.add_example(agent["id"], "deadline?", "July 31", "user")
+    out = Agent(store, llm, agent).improve(trials=2)
+    assert out["adopted"] and out["trials"] == 2
+    assert llm.calls == 1 + 2 * 2 * 2  # playbook draft + 2 playbooks x 2 trials x (answer + grade)
+
+
 def test_llm_config_guards(monkeypatch):
     monkeypatch.delenv("SIA_ALLOW_CUSTOM_BASE_URL", raising=False)
     with pytest.raises(LLMError):
