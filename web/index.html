@@ -278,7 +278,7 @@ await sia(`/v1/agents/${agent.id}/feedback`, { episode_id: run.episode_id, ratin
           <span class="step">Self-host</span>
           <h3>Free</h3>
           <p>Run it with Docker on your own machine or server, with your own model keys. Your data stays
-            in your database, and the source is on GitHub under the project's license.</p>
+            in your database. The source is under the <a href="https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/LICENSE.md" target="_blank" rel="noopener">Functional Source License<span class="sr"> (opens in a new tab)</span></a>: free to use, modify and self-host, but not to resell as a competing service. Each release becomes Apache 2.0 two years after it ships.</p>
           <pre class="mini"><code>docker build -t sia . &amp;&amp; docker run -p 8000:8000 -v sia-data:/data --env-file .env sia</code></pre>
         </div>
         <div class="card">
@@ -311,12 +311,13 @@ await sia(`/v1/agents/${agent.id}/feedback`, { episode_id: run.episode_id, ratin
     <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><use href="#logo"/></svg>
     <span class="wordmark">sia</span>
   </a>
-  <p class="copy">© 2026 SIA</p>
+  <p class="copy">© 2026 Srijith · FSL-1.1-ALv2</p>
   <ul class="foot-links">
     <li><a href="/docs">Docs</a></li>
     <li><a data-repo-link href="https://github.com/SrijithLegend/Self-Improving-Agent" target="_blank" rel="noopener">GitHub<span class="sr"> (opens in a new tab)</span></a></li>
     <li><a href="/llms.txt">llms.txt</a></li>
     <li><a href="/agent.md">agent.md</a></li>
+    <li><a href="https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/LICENSE.md" target="_blank" rel="noopener">License<span class="sr"> (opens in a new tab)</span></a></li>
   </ul>
   <div class="theme" role="radiogroup" aria-label="Theme">
     <button type="button" role="radio" data-theme-set="light" aria-checked="false" tabindex="-1">Light</button>

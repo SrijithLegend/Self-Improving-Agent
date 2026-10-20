@@ -78,7 +78,7 @@ Two real runs of `examples/demo.py` on the free `gemini-flash-latest` model, eac
 
 ## Pricing
 
-- **Self-host: free.** Run it with Docker on your own machine or server, with your own model keys. Your data stays in your database, and the source is on GitHub under the project's license. `docker build -t sia . && docker run -p 8000:8000 -v sia-data:/data --env-file .env sia`
+- **Self-host: free.** Run it with Docker on your own machine or server, with your own model keys. Your data stays in your database. The source is under the [Functional Source License](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/LICENSE.md) (FSL-1.1-ALv2): free to use, modify and self-host, but not to resell as a competing service. Each release becomes Apache 2.0 two years after it ships. `docker build -t sia . && docker run -p 8000:8000 -v sia-data:/data --env-file .env sia`
 - **Hosted: coming soon.** No prices yet.
 
-© 2026 SIA
+© 2026 Srijith · FSL-1.1-ALv2

@@ -54,8 +54,8 @@ Fonts.
 - **Results** shows the two six-example runs of `examples/demo.py`, from the README in git history (commit
   `4aba204`), because the required caption talks about six examples. The later 12-example runs aren't on the
   page.
-- **Pricing.** The project license is "Proprietary" (`pyproject.toml`), not MIT, so the Self-host card doesn't name
-  a license. No prices are shown for hosted.
+- **Pricing.** The Self-host card names the project license, FSL-1.1-ALv2 (`LICENSE.md`). No prices are shown for
+  hosted.
 - **Hosted waitlist** opens a `mailto:` addressed to `<body data-contact="">`. It's empty by default, so the
   visitor's mail app opens with a blank To: field. **Set `data-contact` to a real address before publishing.**
 - **Provider marks** are the monochrome Simple Icons 13.21.0 paths for Google Gemini, Claude, OpenAI and Ollama,

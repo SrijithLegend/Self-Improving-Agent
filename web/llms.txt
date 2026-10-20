@@ -18,4 +18,4 @@ Auth: Authorization: Bearer <SIA key>. Model calls also take X-LLM-Provider (def
 
 - [Interactive API docs](/docs): the full OpenAPI reference
 - [This site as markdown](/agent.md): mission, how it learns, API example, results
-- [Source](https://github.com/SrijithLegend/Self-Improving-Agent)
+- [Source](https://github.com/SrijithLegend/Self-Improving-Agent) (license: FSL-1.1-ALv2, see LICENSE.md)

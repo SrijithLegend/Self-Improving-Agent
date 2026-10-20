@@ -51,7 +51,7 @@ DASHBOARD_HTML = DASHBOARD.read_text(encoding="utf-8")
 DASHBOARD_CSP = sec.dashboard_csp(DASHBOARD_HTML)
 # landing page, mounted at / after every route (the Docker image sets SIA_WEB_DIR)
 WEB = Path(os.getenv("SIA_WEB_DIR") or Path(__file__).resolve().parents[1] / "web")
-LANDING_CSP = sec.landing_csp((WEB / "index.html").read_text(encoding="utf-8")) if (WEB / "index.html").is_file() \
+LANDING_CSP = sec.landing_csp((WEB / "index.html").read_bytes().decode("utf-8")) if (WEB / "index.html").is_file() \
     else sec.API_CSP
 NO_CSP = ("/docs", "/redoc")  # FastAPI's API docs load their own scripts from a CDN
 

@@ -522,5 +522,24 @@ examples/devtools_demo.py   # the end-to-end demo above
 examples/ci/sia-gate.yml    # GitHub Actions gate example
 examples/demo.py            # the original managed-agent demo
 tests/                      # 65 offline tests (no API keys)
+LICENSE.md                  # FSL-1.1-ALv2
 docs/AUDIT.md               # audit, what was built, readiness assessment
 ```
+
+## 📜 License
+
+SIA is under the **Functional Source License, version 1.1, with an Apache 2.0 future license**
+([FSL-1.1-ALv2](LICENSE.md)).
+
+- ✅ **You can** use it, change it and self-host it for free, inside your company or for clients, for research and
+  for teaching.
+- 🚫 **You can't** offer it, or something substantially similar built from it, to others as a commercial product or
+  hosted service that competes with SIA.
+- ⏳ **Two years after each release**, that release is also available under the Apache License 2.0, with no
+  restrictions.
+
+Third-party packages keep their own licenses (all MIT, BSD or Apache 2.0). Provider names and logos on the landing
+page belong to their owners and only show which providers SIA works with.
+
+By sending a contribution (a pull request or patch), you agree that it's licensed under these same terms.
+
