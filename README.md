@@ -8,11 +8,11 @@ Capture runs from your existing Python app → turn verified corrections into te
 let an LLM propose a better prompt → measure both versions on the same dataset → release only what the numbers support.
 
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-46%20passing-1f7a4d)
+![Tests](https://img.shields.io/badge/tests-50%20passing-1f7a4d)
 ![Local first](https://img.shields.io/badge/local%20mode-no%20account%20needed-555)
 ![FastAPI](https://img.shields.io/badge/hosted%20API-FastAPI-009688?logo=fastapi&logoColor=white)
 
-[Why](#-why) · [Quickstart](#-quickstart-5-minutes) · [The workflow](#-the-workflow) · [CI gate](#-ci-regression-gate) · [Demo results](#-demo-results-real-model) · [Hosted API](#-hosted-api) · [Security](#-security-and-data-handling) · [Limitations](#-known-limitations)
+[Why](#-why) · [Quickstart](#-quickstart-5-minutes) · [The workflow](#-the-workflow) · [CI gate](#-ci-regression-gate) · [Demo results](#-demo-results-real-model) · [Hosted API](#-hosted-api) · [Payments](#-payments-razorpay) · [Security](#-security-and-data-handling) · [Limitations](#-known-limitations)
 
 </div>
 
@@ -60,7 +60,7 @@ What makes it different from a tracing tool:
 pip install "sia-devtools[server] @ git+https://github.com/SrijithLegend/Self-Improving-Agent"
 ```
 
-Or from a clone: `pip install -e ".[dev]"`, then `python -m pytest` should show **46 passed**.
+Or from a clone: `pip install -e ".[dev]"`, then `python -m pytest` should show **50 passed**.
 
 **1. Instrument the function you already have.** No framework, no rewrite:
 
@@ -291,7 +291,8 @@ Served by the API at `/` (`sia serve`) or for local mode with `sia dashboard`. I
 | **Evaluations** | per-example results, compare two evaluations, export JSON/CSV |
 | **Improvement lab** | versions, extracted lessons and failure patterns, diff vs active, evidence, approve/reject, activate, roll back |
 | **Project & keys** | settings (redaction, retention, policy, locked text), install snippet, API keys, audit log |
-| **Usage & plan** | runs this month (included vs overage), requests, plan limits |
+| **Usage** | runs this month (included vs overage), requests, plan limits |
+| **Plans & billing** | plan cards, upgrade or extend with Razorpay Checkout, payment history |
 
 Evaluations run your code, so they start from your machine or CI, not from the browser.
 
@@ -397,12 +398,58 @@ Project settings (`sia.update_settings(...)`, `PATCH /projects/{p}`, or the dash
 | Examples per dataset | 200 | 5,000 | 50,000 |
 | Run retention | 14 days | 90 days | 365 days |
 
-Local mode has no limits. There is no payment integration yet: a billing provider's webhook should call
-`POST /v1/admin/orgs/{id}/plan` after a confirmed payment. SIA never handles card data.
+Local mode has no limits. Paid plans are bought through Razorpay (next section); an admin can also set a plan
+with no expiry via `POST /v1/admin/orgs/{id}/plan` or `sia set-plan`.
 
 **Database.** SQLite in WAL mode. Schema changes are numbered migrations applied automatically at startup (see
 `schema_migrations`); existing databases from earlier versions upgrade in place. Back up the file (or the Docker
 `/data` volume) like any database.
+
+---
+
+## 💳 Payments (Razorpay)
+
+Customers upgrade from **Plans & billing** in the dashboard. Each payment buys **30 days** of Pro or Team; paying
+again before it ends adds 30 more days. When a paid period runs out the organization drops back to Free.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser (dashboard)
+    participant S as SIA server
+    participant R as Razorpay
+    B->>S: POST /v1/billing/orders {plan}
+    S->>R: create order (amount from server config)
+    S-->>B: order_id, key_id
+    B->>R: Razorpay Checkout (card / UPI / netbanking)
+    R-->>B: payment_id + signature
+    B->>S: POST /v1/billing/verify
+    S->>S: check HMAC signature
+    S->>R: fetch order: status paid, full amount?
+    S-->>B: plan active (or "pending")
+    R-)S: webhook order.paid (signed) - also activates, idempotent
+```
+
+**Setup**
+
+1. In the Razorpay dashboard (start in **Test mode**), create API keys and set `RAZORPAY_KEY_ID` and
+   `RAZORPAY_KEY_SECRET` on the server.
+2. Add a webhook to `https://<your-server>/v1/billing/webhook` for the events **order.paid** and
+   **payment.captured**, with a secret; set the same value as `RAZORPAY_WEBHOOK_SECRET`.
+3. Optionally set prices: `SIA_PRICE_PRO_PAISE`, `SIA_PRICE_TEAM_PAISE` (defaults ₹1,999 and ₹7,999 per 30 days,
+   placeholders), `SIA_CURRENCY` (default `INR`).
+
+**What protects it**
+
+- The amount comes from server config, never from the browser.
+- A plan changes only when Razorpay confirms the order is **paid in full**. The server checks the checkout signature,
+  then re-fetches the order from Razorpay; an authorized but uncaptured payment stays "pending" until the webhook.
+- Webhooks are rejected unless their HMAC signature matches. Orders belong to one organization; another
+  organization can't verify them. Confirmations are idempotent, so a payment reported twice adds 30 days once.
+- Card, UPI and bank details are entered in Razorpay's checkout window and never reach this server.
+- The dashboard's Content-Security-Policy allows third-party code only from `*.razorpay.com`.
+
+Billing endpoints: `GET /v1/billing`, `POST /v1/billing/orders`, `POST /v1/billing/verify` (full-scope key), and
+`POST /v1/billing/webhook` (Razorpay signature). Billing is off in local mode.
 
 ---
 
@@ -436,7 +483,8 @@ Not production-ready yet. The full assessment is in [docs/AUDIT.md](docs/AUDIT.m
 - Scores are computed by the SDK and uploaded, so they are only as trustworthy as the key holder.
 - Redaction is pattern-based and will miss data that matches no rule.
 - Synchronous Python SDK only; no framework adapters yet (the `trace`/`start_run` API is where they would plug in).
-- No billing provider, backups, metrics or alerting.
+- Razorpay is integrated as 30-day passes, not recurring subscriptions, and there are no invoices or GST receipts
+  from SIA itself (Razorpay sends payment receipts). No backups, metrics or alerting.
 
 ---
 
@@ -452,12 +500,13 @@ sia_devtools/          # the SDK and CLI (pip package "sia-devtools", command "s
 sia/                   # the server
 ├── api.py             # FastAPI: auth, scopes, plans, DevTools routes, managed agents routes
 ├── dashboard.html     # the dashboard (single static page, no build step)
-├── store.py           # organizations, keys, plans, usage, managed agents
+├── store.py           # organizations, keys, plans, payments, usage, managed agents
+├── billing.py         # Razorpay orders, signature and webhook checks
 ├── agent.py           # the original self-improvement engine
 └── llm.py             # one HTTP client for 9 LLM providers
 examples/devtools_demo.py   # the end-to-end demo above
 examples/ci/sia-gate.yml    # GitHub Actions gate example
 examples/demo.py            # the original managed-agent demo
-tests/                      # 46 offline tests (no API keys)
+tests/                      # 50 offline tests (no API keys)
 docs/AUDIT.md               # audit, what was built, readiness assessment
 ```

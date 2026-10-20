@@ -29,7 +29,7 @@ and is now implemented on top of the shared `compare_scores`.
 | 6. Hosted API | Organizations, projects, multiple keys with `full`/`ingest` scopes, rotation and revocation, plan limits, 413 body limit, JSON access logs, health check, pagination, admin plan endpoint as the payment boundary. |
 | 7. Dashboard | Single static page served by the API: overview, runs and traces, datasets and review queue, evaluations and comparisons, improvement lab with diff/approve/reject/rollback, project settings and keys, usage. Real data only. |
 | 8. Docs, deploy, demo | README, `.env.example`, Dockerfile (non-root, healthcheck), `pyproject.toml` (`sia` command), GitHub Actions gate example, `examples/devtools_demo.py`. |
-| 9. Tests | 46 offline tests (see `tests/`), also run on a clean Python 3.11 install. |
+| 9. Tests | 50 offline tests (see `tests/`), also run on a clean Python 3.11 install. |
 
 ## 3. Production readiness: not yet
 
@@ -54,7 +54,8 @@ rules are tested, but these must be addressed before hosting paying customers:
 - `sia/agent.py` managed-agent `study` and `improve` still run synchronously inside the request.
 
 **Product**
-- Prices and plan limits are hypotheses. No billing provider is integrated; `POST /v1/admin/orgs/{id}/plan` is
-  the boundary a payment webhook would call.
+- Prices and plan limits are hypotheses. Razorpay is integrated (orders, checkout verification, signed webhooks,
+  30-day passes), tested against a fake Razorpay only; it has not yet been run against a real Razorpay account.
+  No recurring subscriptions, refunds or GST invoicing.
 - Only a synchronous Python SDK. No async support, no framework adapters (LangChain, LlamaIndex, ...).
 - The gate can only protect behaviour that the developer's dataset and target function exercise.

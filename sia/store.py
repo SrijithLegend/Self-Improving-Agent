@@ -47,7 +47,14 @@ ALTER TABLE examples ADD COLUMN status TEXT NOT NULL DEFAULT 'verified';
 ALTER TABLE examples ADD COLUMN episode_id TEXT;
 ALTER TABLE usage ADD COLUMN units INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE usage ADD COLUMN project_id TEXT
+"""), ("legacy-002-payments", """
+ALTER TABLE tenants ADD COLUMN paid_until REAL;
+CREATE TABLE IF NOT EXISTS payments (order_id TEXT PRIMARY KEY, org_id TEXT NOT NULL, plan TEXT NOT NULL,
+    amount INTEGER NOT NULL, currency TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created', payment_id TEXT,
+    created REAL, paid REAL);
+CREATE INDEX IF NOT EXISTS idx_payments_org ON payments(org_id, created)
 """)]
+PAID_PERIOD_DAYS = 30  # one payment buys this many days of a paid plan
 
 # Starting hypotheses for a freemium plan, not validated prices. Enforced server-side in sia/api.py.
 PLANS = {
@@ -127,14 +134,47 @@ class Store:
         self.x("INSERT INTO tenants (id, name, created, plan) VALUES (?,?,?,?)", tid, name, time.time(), plan)
         return {"tenant_id": tid, "name": name, "api_key": self.create_key(tid, "default")["api_key"]}
 
+    # a paid plan whose period ran out falls back to free
+    PLAN_SQL = "CASE WHEN t.paid_until IS NOT NULL AND t.paid_until < ? THEN 'free' ELSE t.plan END"
+
     def tenant(self, tenant_id):
-        rows = self.q("SELECT id, name, plan, created FROM tenants WHERE id=?", tenant_id)
+        rows = self.q(f"SELECT t.id, t.name, {self.PLAN_SQL} plan, t.paid_until, t.created FROM tenants t WHERE id=?",
+                      time.time(), tenant_id)
         return rows[0] if rows else None
 
     def set_plan(self, tenant_id, plan):
+        """Admin override: set a plan with no expiry."""
         if plan not in PLANS:
             raise ValueError(f"plan must be one of {', '.join(PLANS)}")
-        return bool(self.n("UPDATE tenants SET plan=? WHERE id=?", plan, tenant_id))
+        return bool(self.n("UPDATE tenants SET plan=?, paid_until=NULL WHERE id=?", plan, tenant_id))
+
+    # --- payments ------------------------------------------------------------
+    def add_payment(self, order_id, tenant_id, plan, amount, currency):
+        self.x("INSERT INTO payments (order_id, org_id, plan, amount, currency, created) VALUES (?,?,?,?,?,?)",
+               order_id, tenant_id, plan, amount, currency, time.time())
+
+    def payment(self, order_id):
+        rows = self.q("SELECT * FROM payments WHERE order_id=?", order_id)
+        return rows[0] if rows else None
+
+    def payments(self, tenant_id, limit=50):
+        return self.q("SELECT * FROM payments WHERE org_id=? ORDER BY created DESC LIMIT ?", tenant_id, limit)
+
+    def mark_paid(self, order_id, payment_id):
+        """Record a confirmed payment and extend the plan by PAID_PERIOD_DAYS. Idempotent: an order that is already
+        paid changes nothing, so a webhook and the checkout callback can both report the same payment."""
+        now = time.time()
+        with self._conn() as c:
+            if not c.execute("UPDATE payments SET status='paid', payment_id=?, paid=? WHERE order_id=? AND status!='paid'",
+                             (payment_id, now, order_id)).rowcount:
+                return False
+            pay = c.execute("SELECT org_id, plan FROM payments WHERE order_id=?", (order_id,)).fetchone()
+            t = c.execute("SELECT plan, paid_until FROM tenants WHERE id=?", (pay["org_id"],)).fetchone()
+            # same plan still running: add to it; otherwise the new period starts now
+            start = t["paid_until"] if t["plan"] == pay["plan"] and (t["paid_until"] or 0) > now else now
+            c.execute("UPDATE tenants SET plan=?, paid_until=? WHERE id=?",
+                      (pay["plan"], start + PAID_PERIOD_DAYS * 86400, pay["org_id"]))
+        return True
 
     def create_key(self, tenant_id, name="key", scope="full"):
         """Keys are stored only as SHA-256 hashes; the plaintext is returned once, here."""
@@ -163,8 +203,9 @@ class Store:
         return {"tenant_id": tenant_id, **new}
 
     def tenant_by_key(self, key):
-        rows = self.q("""SELECT t.id, t.name, t.plan, k.id key_id, k.scope FROM api_keys k JOIN tenants t ON t.id=k.org_id
-                         WHERE k.key_hash=? AND k.revoked IS NULL""", hash_key(key))
+        rows = self.q(f"""SELECT t.id, t.name, {self.PLAN_SQL} plan, t.paid_until, k.id key_id, k.scope
+                          FROM api_keys k JOIN tenants t ON t.id=k.org_id WHERE k.key_hash=? AND k.revoked IS NULL""",
+                      time.time(), hash_key(key))
         if not rows:
             return None
         now = time.time()  # last_used is informational; write it at most once a minute per key

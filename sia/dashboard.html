@@ -6,82 +6,141 @@
 <title>SIA DevTools</title>
 <style>
 :root {
-  --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e4e3df; --soft: #f0efeb;
-  --accent: #2f5bd3; --accent-ink: #ffffff; --good: #1f7a4d; --good-bg: #e3f3ea; --bad: #b3261e; --bad-bg: #fbe7e5;
-  --warn: #8a5a00; --warn-bg: #fdf1d8; --code: #f3f2ee; --shadow: 0 1px 2px rgba(0,0,0,.05);
+  --bg: #f6f6f3; --panel: #ffffff; --ink: #18181b; --ink-2: #3f3f46; --muted: #71717a; --line: #e7e5e0; --soft: #f1f0ec;
+  --accent: #5b4bdb; --accent-2: #8b5cf6; --accent-soft: #eeebff; --accent-ink: #ffffff;
+  --good: #15803d; --good-bg: #e7f6ec; --bad: #c2410c; --bad-bg: #fdede4; --warn: #a16207; --warn-bg: #fdf4d9;
+  --code: #f4f3ef; --side: #16151d; --side-ink: #d9d8e3; --side-muted: #8b8a99; --side-hover: #24232e;
+  --shadow: 0 1px 2px rgba(24,24,27,.04), 0 4px 16px -6px rgba(24,24,27,.08); --radius: 14px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #141413; --panel: #1d1d1b; --ink: #ecebe6; --muted: #a09f99; --line: #33332f; --soft: #262623;
-    --accent: #7c9cff; --accent-ink: #10131c; --good: #6fd19f; --good-bg: #17301f; --bad: #ff8a80; --bad-bg: #3a1c1a;
-    --warn: #f1c46b; --warn-bg: #352a12; --code: #232321; --shadow: none;
+    --bg: #0f0f13; --panel: #17171d; --ink: #f1f1f4; --ink-2: #d4d4dc; --muted: #9b9aa8; --line: #2a2a33; --soft: #20202a;
+    --accent: #9d8cff; --accent-2: #c4b5fd; --accent-soft: #252040; --accent-ink: #0f0f13;
+    --good: #5ad08a; --good-bg: #13291c; --bad: #ff9a6b; --bad-bg: #351c12; --warn: #f3c969; --warn-bg: #33280f;
+    --code: #1d1d25; --side: #0b0b0f; --side-ink: #d9d8e3; --side-muted: #7d7c8b; --side-hover: #1a1a22; --shadow: none;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #141413; --panel: #1d1d1b; --ink: #ecebe6; --muted: #a09f99; --line: #33332f; --soft: #262623;
-  --accent: #7c9cff; --accent-ink: #10131c; --good: #6fd19f; --good-bg: #17301f; --bad: #ff8a80; --bad-bg: #3a1c1a;
-  --warn: #f1c46b; --warn-bg: #352a12; --code: #232321; --shadow: none;
+  --bg: #0f0f13; --panel: #17171d; --ink: #f1f1f4; --ink-2: #d4d4dc; --muted: #9b9aa8; --line: #2a2a33; --soft: #20202a;
+  --accent: #9d8cff; --accent-2: #c4b5fd; --accent-soft: #252040; --accent-ink: #0f0f13;
+  --good: #5ad08a; --good-bg: #13291c; --bad: #ff9a6b; --bad-bg: #351c12; --warn: #f3c969; --warn-bg: #33280f;
+  --code: #1d1d25; --side: #0b0b0f; --side-ink: #d9d8e3; --side-muted: #7d7c8b; --side-hover: #1a1a22; --shadow: none;
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
 a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-code, pre, .mono { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 12.5px; }
-pre { background: var(--code); padding: 10px 12px; border-radius: 8px; overflow: auto; max-height: 360px; margin: 6px 0;
-      white-space: pre-wrap; word-break: break-word; }
-.app { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
-nav { background: var(--panel); border-right: 1px solid var(--line); padding: 16px 12px; position: sticky; top: 0; height: 100vh; }
-nav .brand { font-weight: 700; font-size: 15px; padding: 4px 8px 14px; }
-nav .brand small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
-nav a { display: block; padding: 7px 10px; border-radius: 6px; color: var(--ink); }
-nav a.on { background: var(--soft); font-weight: 600; text-decoration: none; }
-nav a:hover { background: var(--soft); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+code, pre, .mono { font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace; font-size: 12.5px; }
+code { background: var(--code); padding: 1px 6px; border-radius: 5px; }
+pre { background: var(--code); padding: 12px 14px; border-radius: 10px; overflow: auto; max-height: 360px; margin: 6px 0;
+      white-space: pre-wrap; word-break: break-word; border: 1px solid var(--line); }
+pre code { background: none; padding: 0; }
+.app { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 100vh; }
+nav { background: var(--side); color: var(--side-ink); padding: 18px 14px; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 2px; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 18px; }
+.logo { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 14px; box-shadow: 0 4px 14px -4px var(--accent); }
+.brand b { display: block; font-size: 15px; color: #fff; letter-spacing: -.01em; }
+.brand small { display: block; color: var(--side-muted); font-size: 12px; }
 nav .proj { margin: 0 4px 14px; }
-main { padding: 22px 28px 60px; max-width: 1180px; width: 100%; min-width: 0; }
-h1 { font-size: 20px; margin: 0 0 4px; }
-h2 { font-size: 15px; margin: 22px 0 8px; }
-.sub { color: var(--muted); margin: 0 0 16px; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow); margin-bottom: 14px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 14px; }
-.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
-.stat .k { color: var(--muted); font-size: 12px; }
-.stat .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+nav .proj select { width: 100%; background: var(--side-hover); color: var(--side-ink); border-color: #2e2d3a; }
+nav .sect { color: var(--side-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; padding: 12px 10px 4px; }
+nav a { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 9px; color: var(--side-ink); font-weight: 500; }
+nav a svg { width: 17px; height: 17px; flex: none; opacity: .75; }
+nav a.on { background: var(--side-hover); color: #fff; text-decoration: none; box-shadow: inset 2px 0 0 var(--accent-2); }
+nav a.on svg { opacity: 1; color: var(--accent-2); }
+nav a:hover { background: var(--side-hover); text-decoration: none; }
+nav .foot { margin-top: auto; padding: 10px; color: var(--side-muted); font-size: 12px; }
+nav .foot a { padding: 6px 0; color: var(--side-muted); }
+main { padding: 28px 36px 64px; max-width: 1240px; width: 100%; min-width: 0; }
+.head { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+.head > div { flex: 1 1 320px; }
+h1 { font-size: 24px; line-height: 1.2; margin: 0 0 6px; letter-spacing: -.02em; font-weight: 700; }
+h2 { font-size: 15px; margin: 26px 0 10px; letter-spacing: -.01em; }
+.card h2:first-child, .card h3:first-child { margin-top: 0; }
+h3 { font-size: 13px; margin: 0 0 8px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+.sub { color: var(--muted); margin: 0; }
+h1 + .sub { margin-bottom: 20px; } .head h1 + .sub { margin-bottom: 0; }
+.back { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 13px; margin-bottom: 10px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow); margin-bottom: 16px; }
+.card.flush { padding: 6px 4px; }
+.card.flush > h2, .card.flush > h3, .card.flush > p { padding: 10px 16px 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-bottom: 16px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); position: relative; overflow: hidden; }
+.stat .k { color: var(--muted); font-size: 12.5px; font-weight: 500; }
+.stat .v { font-size: 28px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; margin-top: 2px; }
 .stat .n { color: var(--muted); font-size: 12px; }
+.stat.hero { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: 0; color: #fff; }
+.stat.hero .k, .stat.hero .n { color: rgba(255,255,255,.8); }
 .tbl { width: 100%; overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; }
-th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-weight: 500; font-size: 12px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; background: transparent; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 tr.click { cursor: pointer; } tr.click:hover td { background: var(--soft); }
-.pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; background: var(--soft); color: var(--muted); white-space: nowrap; }
+td pre { max-height: 140px; margin: 0; }
+.pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 99px; font-size: 12px; font-weight: 600; background: var(--soft); color: var(--ink-2); white-space: nowrap; }
+.pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .7; }
 .pill.good { background: var(--good-bg); color: var(--good); } .pill.bad { background: var(--bad-bg); color: var(--bad); }
-.pill.warn { background: var(--warn-bg); color: var(--warn); } .pill.blue { background: var(--soft); color: var(--accent); }
-button, .btn { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: 6px 12px; border-radius: 7px; cursor: pointer; }
-button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); } .pill.blue { background: var(--accent-soft); color: var(--accent); }
+button, .btn { font: inherit; font-weight: 600; border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: 8px 14px; border-radius: 9px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: background .12s, border-color .12s, transform .05s; }
+button:hover, .btn:hover { background: var(--soft); text-decoration: none; }
+button:active { transform: translateY(1px); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); box-shadow: 0 4px 14px -6px var(--accent); }
+button.primary:hover { filter: brightness(1.08); background: var(--accent); }
 button.danger { color: var(--bad); }
 button:disabled { opacity: .5; cursor: default; }
-input, select, textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; max-width: 100%; }
-textarea { width: 100%; min-height: 70px; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
-label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
-.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+input, select, textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px; max-width: 100%; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+textarea { width: 100%; min-height: 80px; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+label { display: block; font-size: 12.5px; color: var(--muted); margin: 12px 0 5px; font-weight: 500; }
+label input[type="checkbox"] { margin-right: 6px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .row > * { flex: 0 0 auto; }
 .spacer { flex: 1 1 auto; }
-.bar { height: 6px; background: var(--soft); border-radius: 99px; overflow: hidden; min-width: 60px; }
-.bar > i { display: block; height: 100%; background: var(--accent); }
+.bar { height: 7px; background: var(--soft); border-radius: 99px; overflow: hidden; min-width: 60px; }
+.bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: 99px; }
 .muted { color: var(--muted); }
-.empty { color: var(--muted); padding: 18px; text-align: center; border: 1px dashed var(--line); border-radius: 10px; }
-.toast { position: fixed; bottom: 16px; right: 16px; background: var(--ink); color: var(--bg); padding: 10px 14px; border-radius: 8px; max-width: 420px; z-index: 9; }
+.empty { color: var(--muted); padding: 26px 18px; text-align: center; border: 1px dashed var(--line); border-radius: 12px; background: var(--soft); }
+.empty pre { text-align: left; }
+.toast { position: fixed; bottom: 20px; right: 20px; background: var(--ink); color: var(--bg); padding: 12px 16px; border-radius: 12px; max-width: 440px; z-index: 9; box-shadow: 0 12px 30px -10px rgba(0,0,0,.4); font-weight: 500; animation: rise .2s ease-out; }
+@keyframes rise { from { transform: translateY(8px); opacity: 0; } }
 .diff del { background: var(--bad-bg); color: var(--bad); text-decoration: none; display: block; }
 .diff ins { background: var(--good-bg); color: var(--good); text-decoration: none; display: block; }
-.tree { margin-left: 16px; border-left: 2px solid var(--line); padding-left: 10px; }
-.login { max-width: 420px; margin: 12vh auto; }
-.split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-@media (max-width: 760px) {
+.tree { margin-left: 14px; border-left: 2px solid var(--line); padding: 4px 0 4px 14px; }
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.split > .card { margin-bottom: 0; } .split { margin-bottom: 16px; }
+.verdict { display: flex; gap: 14px; align-items: flex-start; }
+.verdict .big { font-size: 13px; }
+.chart { width: 100%; height: 140px; display: block; }
+.chart .ln { fill: none; stroke: var(--accent); stroke-width: 2.25; stroke-linejoin: round; stroke-linecap: round; }
+.chart .ar { fill: url(#g); }
+.chart .gr { stroke: var(--line); stroke-width: 1; }
+.chart text { fill: var(--muted); font-size: 10px; }
+.chart circle { fill: var(--panel); stroke: var(--accent); stroke-width: 2; }
+.login-wrap { min-height: 100vh; display: grid; place-items: center; padding: 16px; background: radial-gradient(1200px 600px at 10% -10%, var(--accent-soft), transparent), var(--bg); }
+.login { width: 100%; max-width: 440px; }
+.plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.plan { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow); }
+.plan.cur { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.plan .price { font-size: 30px; font-weight: 750; letter-spacing: -.02em; }
+.plan .price small { font-size: 13px; color: var(--muted); font-weight: 500; }
+.plan ul { margin: 0; padding-left: 18px; color: var(--ink-2); }
+.plan button { margin-top: auto; justify-content: center; }
+.callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 12px 14px; border-radius: 10px; margin-bottom: 16px; }
+.callout.bad { border-color: var(--bad); background: var(--bad-bg); }
+details > summary { cursor: pointer; font-weight: 600; }
+@media (max-width: 860px) {
   .app { grid-template-columns: 1fr; }
-  nav { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
-  nav .brand { padding: 0 8px 0 0; width: 100%; } nav .proj { margin: 4px 0; width: 100%; }
-  main { padding: 16px; }
+  nav { position: static; height: auto; padding: 12px 16px; flex-direction: row; flex-wrap: wrap; align-items: center; }
+  .brand { padding: 0; width: 100%; margin-bottom: 8px; } nav .proj { margin: 0 0 6px; width: 100%; }
+  nav .sect, nav .foot { display: none; }
+  nav a { padding: 6px 9px; font-size: 13px; }
+  main { padding: 18px 16px 48px; }
   .split { grid-template-columns: 1fr; }
+  .stat .v { font-size: 24px; }
 }
 </style>
 </head>
@@ -137,16 +196,29 @@ async function download(path, filename) {
 function logout() { S.key = ""; S.me = null; try { sessionStorage.removeItem("sia_key"); } catch (e) {} renderLogin(); }
 
 // --- shell ------------------------------------------------------------------
-const NAV = [["overview", "Overview"], ["runs", "Runs"], ["datasets", "Datasets"], ["evals", "Evaluations"],
-             ["lab", "Improvement lab"], ["project", "Project & keys"], ["usage", "Usage & plan"]];
+const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const ICON = {
+  overview: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  runs: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+  datasets: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>',
+  evals: '<polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  lab: '<path d="M9 3h6"/><path d="M10 3v6L4.5 18.5A1.7 1.7 0 0 0 6 21h12a1.7 1.7 0 0 0 1.5-2.5L14 9V3"/><path d="M7 15h10"/>',
+  project: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2"/><path d="m16 7 3 3"/><path d="m19 4 2 2"/>',
+  usage: '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+  billing: '<rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><line x1="6" y1="15" x2="10" y2="15"/>',
+};
+const NAV = [["Observe", [["overview", "Overview"], ["runs", "Runs"]]],
+             ["Improve", [["datasets", "Datasets"], ["evals", "Evaluations"], ["lab", "Improvement lab"]]],
+             ["Account", [["project", "Project & keys"], ["usage", "Usage"], ["billing", "Plans & billing"]]]];
 
 function shell(view, body) {
   const opts = S.projects.map((p) => `<option value="${esc(p.id)}" ${p.id === S.pid ? "selected" : ""}>${esc(p.name)}</option>`).join("");
-  $("#root").innerHTML = `<div class="app"><nav>
-    <div class="brand">SIA DevTools<small>${esc(S.me.local_mode ? "local mode" : S.me.name + " · " + S.me.plan)}</small></div>
-    <div class="proj"><select id="proj" aria-label="Project" style="width:100%">${opts}<option value="__new">+ New project…</option></select></div>
-    ${NAV.map(([k, label]) => `<a href="#/${k}" class="${view === k ? "on" : ""}">${label}</a>`).join("")}
-    ${S.me.local_mode ? "" : `<a href="#" data-act="logout">Sign out</a>`}
+  $("#root").innerHTML = `<div class="app"><nav aria-label="Main">
+    <div class="brand"><div class="logo">S</div><div><b>SIA DevTools</b><small>${esc(S.me.local_mode ? "Local mode" : S.me.name + " · " + S.me.plan + " plan")}</small></div></div>
+    <div class="proj"><select id="proj" aria-label="Project">${opts}<option value="__new">+ New project…</option></select></div>
+    ${NAV.map(([sect, items]) => `<div class="sect">${sect}</div>` + items.map(([k, label]) =>
+      `<a href="#/${k}" class="${view === k ? "on" : ""}">${svg(ICON[k])}${label}</a>`).join("")).join("")}
+    <div class="foot">${S.me.local_mode ? "Data stays on this machine." : `<a href="#" data-act="logout">Sign out</a>`}</div>
   </nav><main>${body}</main></div>`;
   $("#proj").onchange = async (e) => {
     if (e.target.value === "__new") {
@@ -164,13 +236,28 @@ async function loadProjects() {
 }
 
 function renderLogin(err) {
-  $("#root").innerHTML = `<div class="login card"><h1>SIA DevTools</h1>
-    <p class="sub">Paste a <b>full-scope</b> API key. It stays in this browser tab only (session storage) and is sent
-    only to this server.</p>
-    <form data-form="login"><label for="k">API key</label><input id="k" name="key" type="password" autocomplete="off" style="width:100%" required>
-    <div class="row" style="margin-top:12px"><button class="primary">Sign in</button></div>
-    ${err ? `<p style="color:var(--bad)">${esc(err)}</p>` : ""}</form>
-    <p class="muted" style="font-size:12px">Running locally? <code>sia dashboard</code> opens this page without a key.</p></div>`;
+  $("#root").innerHTML = `<div class="login-wrap"><div class="login card">
+    <div class="brand" style="padding:0 0 14px"><div class="logo">S</div><div><b style="color:var(--ink)">SIA DevTools</b><small>Tested improvements for AI apps</small></div></div>
+    <h1>Sign in</h1>
+    <p class="sub">Paste a <b>full-scope</b> API key. It stays in this browser tab (session storage) and is only sent to this server.</p>
+    <form data-form="login"><label for="k">API key</label><input id="k" name="key" type="password" autocomplete="off" placeholder="sia_…" style="width:100%" required>
+    <div class="row" style="margin-top:14px"><button class="primary" style="width:100%;justify-content:center">Sign in</button></div>
+    ${err ? `<p class="callout bad" style="margin:14px 0 0">${esc(err)}</p>` : ""}</form>
+    <p class="muted" style="font-size:12.5px;margin-bottom:0">Running locally? <code>sia dashboard</code> opens this page without a key.</p></div></div>`;
+}
+
+function chart(evals) {
+  const pts = [...evals].reverse();
+  if (pts.length < 2) return `<p class="muted" style="margin:0">Run two or more evaluations to see the trend.</p>`;
+  const W = 640, H = 150, L = 34, R = 12, T = 12, B = 22;
+  const x = (i) => L + (i * (W - L - R)) / (pts.length - 1), y = (v) => T + (1 - v) * (H - T - B);
+  const line = pts.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.summary.score).toFixed(1)}`).join("");
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Evaluation score trend">
+    <defs><linearGradient id="g" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".22"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
+    ${[0, 0.5, 1].map((v) => `<line class="gr" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 8}" y="${y(v) + 3}" text-anchor="end">${v.toFixed(1)}</text>`).join("")}
+    <path class="ar" d="${line}L${x(pts.length - 1)},${y(0)}L${x(0)},${y(0)}Z"/><path class="ln" d="${line}"/>
+    ${pts.map((p, i) => `<circle cx="${x(i)}" cy="${y(p.summary.score)}" r="4"><title>${esc(verLabel(p).replace(/&[^;]+;/g, ""))}: ${num(p.summary.score)} (${ago(p.created)})</title></circle>`).join("")}
+  </svg>`;
 }
 
 // --- views ------------------------------------------------------------------
@@ -180,29 +267,65 @@ V.overview = async () => {
   const o = await api(P() + "/overview");
   const latest = o.latest_comparison;
   const ev = o.evaluations;
-  return `<h1>Overview</h1><p class="sub">Production runs only (evaluation traffic excluded). All numbers come from stored data.</p>
+  return `<div class="head"><div><h1>Overview</h1><p class="sub">Production runs only (evaluation traffic excluded). Every number comes from stored data.</p></div></div>
   <div class="grid">
-    <div class="stat"><div class="k">Runs</div><div class="v">${int(o.runs)}</div></div>
-    <div class="stat"><div class="k">Error rate</div><div class="v">${pct(o.error_rate)}</div><div class="n">${int(o.errors)} errors</div></div>
-    <div class="stat"><div class="k">Avg latency</div><div class="v">${ms(o.avg_latency_ms)}</div></div>
+    <div class="stat hero"><div class="k">Latest eval score</div><div class="v">${ev[0] ? num(ev[0].summary.score) : "–"}</div><div class="n">${ev[0] ? esc(ev[0].dataset_name) + " v" + ev[0].dataset_version + " · " + verLabel(ev[0]) : "no evaluations yet"}</div></div>
+    <div class="stat"><div class="k">Runs</div><div class="v">${int(o.runs)}</div><div class="n">${int(o.errors)} errors</div></div>
+    <div class="stat"><div class="k">Error rate</div><div class="v">${pct(o.error_rate)}</div><div class="n">top-level runs</div></div>
+    <div class="stat"><div class="k">Avg latency</div><div class="v">${ms(o.avg_latency_ms)}</div><div class="n">per run</div></div>
     <div class="stat"><div class="k">Tokens</div><div class="v">${int((o.prompt_tokens || 0) + (o.completion_tokens || 0))}</div><div class="n">${o.cost != null ? "$" + Number(o.cost).toFixed(4) + " reported cost" : "no cost reported"}</div></div>
-    <div class="stat"><div class="k">Feedback</div><div class="v">${int(o.feedback.pending || 0)}</div><div class="n">pending review · ${int(o.feedback.verified || 0)} verified</div></div>
-    <div class="stat"><div class="k">Latest eval score</div><div class="v">${ev[0] ? num(ev[0].summary.score) : "–"}</div><div class="n">${ev[0] ? esc(ev[0].dataset_name) + " v" + ev[0].dataset_version : "no evaluations yet"}</div></div>
+    <div class="stat"><div class="k">Feedback to review</div><div class="v">${int(o.feedback.pending || 0)}</div><div class="n">${int(o.feedback.verified || 0)} verified · ${int(o.feedback.rejected || 0)} rejected</div></div>
   </div>
   <div class="split">
-  <div class="card"><h2 style="margin-top:0">Latest improvement decision</h2>${latest ? `
-    <p>${pill(latest.verdict)} ${esc(latest.reason)}</p>
-    <p class="muted">${verLabel(latest.baseline)} ${num(latest.baseline.score)} → ${verLabel(latest.candidate)} ${num(latest.candidate.score)} on ${latest.n} paired examples · ${ago(latest.created)}</p>
-    <a href="#/compare/${esc(latest.id)}">Open comparison</a>` : `<p class="empty">No comparisons yet.</p>`}</div>
-  <div class="card"><h2 style="margin-top:0">Recent failures</h2>${o.recent_failures.length ? `<div class="tbl"><table>
-    ${o.recent_failures.map((r) => `<tr class="click" data-go="#/runs/${esc(r.id)}"><td>${esc(r.name)}</td><td class="muted">${short(r.error, 70)}</td><td class="muted">${ago(r.started)}</td></tr>`).join("")}</table></div>` : `<p class="empty">No failed runs.</p>`}</div>
+  <div class="card"><h3>Latest release decision</h3>${latest ? `
+    <div class="verdict"><div>${pill(latest.verdict)}</div><div><b>${esc(latest.reason)}</b>
+    <p class="muted" style="margin:6px 0 10px">${verLabel(latest.baseline)} <b>${num(latest.baseline.score)}</b> → ${verLabel(latest.candidate)} <b>${num(latest.candidate.score)}</b> on ${latest.n} paired examples · ${ago(latest.created)}</p>
+    <a href="#/compare/${esc(latest.id)}">Open comparison →</a></div></div>` : `<p class="empty">No comparisons yet.</p>`}</div>
+  <div class="card"><h3>Evaluation trend</h3>${chart(ev)}</div>
   </div>
-  <div class="card"><h2 style="margin-top:0">Quality by prompt version</h2>${o.by_version.length ? `<div class="tbl"><table>
-    <tr><th>Version</th><th class="num">Runs</th><th class="num">Error rate</th><th class="num">Avg latency</th><th class="num">Avg feedback</th></tr>
+  <div class="split">
+  <div class="card flush"><h3>Quality by prompt version</h3>${o.by_version.length ? `<div class="tbl"><table>
+    <tr><th>Version</th><th class="num">Runs</th><th class="num">Errors</th><th class="num">Latency</th><th class="num">Feedback</th></tr>
     ${o.by_version.map((b) => `<tr><td>${b.version == null ? '<span class="muted">untracked</span>' : esc(b.version_name) + "@" + b.version}${o.active_versions.some((a) => a.name === b.version_name && a.version === b.version) ? " " + pill("active", "good") : ""}</td>
-      <td class="num">${int(b.runs)}</td><td class="num">${pct(b.errors / b.runs)}</td><td class="num">${ms(b.avg_latency_ms)}</td><td class="num">${b.avg_rating == null ? "–" : num(b.avg_rating, 2)}</td></tr>`).join("")}</table></div>` : `<p class="empty">No runs yet. ${snippet()}</p>`}</div>
-  <div class="card"><h2 style="margin-top:0">Recent evaluations</h2>${evalTable(ev)}</div>`;
+      <td class="num">${int(b.runs)}</td><td class="num">${pct(b.errors / b.runs)}</td><td class="num">${ms(b.avg_latency_ms)}</td><td class="num">${b.avg_rating == null ? "–" : num(b.avg_rating, 2)}</td></tr>`).join("")}</table></div>` : `<div class="empty" style="margin:12px">No runs yet. ${snippet()}</div>`}</div>
+  <div class="card flush"><h3>Recent failures</h3>${o.recent_failures.length ? `<div class="tbl"><table>
+    ${o.recent_failures.map((r) => `<tr class="click" data-go="#/runs/${esc(r.id)}"><td>${esc(r.name)}</td><td class="muted">${short(r.error, 70)}</td><td class="muted">${ago(r.started)}</td></tr>`).join("")}</table></div>` : `<div class="empty" style="margin:12px">No failed runs. 🎉</div>`}</div>
+  </div>
+  <div class="card flush"><h3>Recent evaluations</h3>${evalTable(ev)}</div>`;
 };
+
+V.billing = async () => {
+  const b = await api("/billing");
+  const money = (p) => new Intl.NumberFormat("en-IN", { style: "currency", currency: b.currency, maximumFractionDigits: 0 }).format(p / 100);
+  const feats = (l) => [`${int(l.projects)} project${l.projects > 1 ? "s" : ""}`, `${int(l.runs_per_month)} runs / month${l.overage ? " + overage" : ""}`,
+                        `${int(l.examples_per_dataset)} examples per dataset`, `${l.retention_days}-day run history`];
+  const tiers = [["free", "Free", 0, "Try it on one project."], ["pro", "Pro", b.prices.pro, "For a team shipping one product."],
+                 ["team", "Team", b.prices.team, "Several products, longer history."]];
+  const until = b.paid_until ? new Date(b.paid_until * 1000).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" }) : null;
+  return `<div class="head"><div><h1>Plans & billing</h1><p class="sub">Pay for 30 days at a time with Razorpay (cards, UPI, netbanking, wallets). Your card details go to Razorpay, never to this server.</p></div></div>
+  ${S.me.local_mode ? `<div class="callout">Local mode has no limits and no billing. Plans apply to the hosted service.</div>` :
+    !b.enabled ? `<div class="callout">Payments are not configured on this server yet. An admin sets <code>RAZORPAY_KEY_ID</code> and <code>RAZORPAY_KEY_SECRET</code> to enable them.</div>` : ""}
+  <div class="card"><div class="row"><div><h3>Current plan</h3><div style="font-size:20px;font-weight:700;text-transform:capitalize">${esc(b.plan)}</div>
+    <div class="muted">${until ? `Paid through ${esc(until)}. Paying again adds 30 days.` : b.plan === "free" ? "No paid period." : "No expiry."}</div></div></div></div>
+  <div class="plans">${tiers.map(([k, name, price, blurb]) => `<div class="plan ${b.plan === k ? "cur" : ""}">
+    <div class="row"><b style="font-size:16px">${name}</b>${b.plan === k ? pill("current", "blue") : ""}</div>
+    <div class="price">${price ? money(price) : money(0)} <small>${price ? "/ 30 days" : "forever"}</small></div>
+    <div class="muted">${blurb}</div><ul>${feats(b.plans[k]).map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
+    ${k === "free" ? "" : `<button class="${b.plan === k ? "" : "primary"}" data-act="pay" data-plan="${k}" ${b.enabled ? "" : "disabled"}>${b.plan === k ? "Extend 30 days" : "Upgrade to " + name}</button>`}
+  </div>`).join("")}</div>
+  <p class="muted" style="font-size:12.5px">Prices are early placeholders and may change. Payments are confirmed with Razorpay before the plan changes.</p>
+  <div class="card flush"><h3>Payment history</h3>${b.payments.length ? `<div class="tbl"><table><tr><th>Date</th><th>Plan</th><th class="num">Amount</th><th>Status</th><th>Reference</th></tr>
+    ${b.payments.map((p) => `<tr><td>${when(p.created)}</td><td style="text-transform:capitalize">${esc(p.plan)}</td><td class="num">${money(p.amount)}</td><td>${pill(p.status, p.status === "paid" ? "good" : "warn")}</td><td class="mono muted">${esc(p.payment_id || p.order_id)}</td></tr>`).join("")}</table></div>` : `<div class="empty" style="margin:12px">No payments yet.</div>`}</div>`;
+};
+
+function loadScript(src) {
+  return new Promise((ok, fail) => {
+    if (window.Razorpay) return ok();
+    const s = document.createElement("script"); s.src = src; s.onload = ok;
+    s.onerror = () => fail(new Error("Could not load Razorpay checkout. Check your connection or ad blocker."));
+    document.head.appendChild(s);
+  });
+}
 
 const verLabel = (s) => s.version != null ? esc(s.version_name) + "@" + s.version : s.prompt_sha ? "prompt " + esc(s.prompt_sha.slice(0, 8)) : "no prompt";
 
@@ -428,7 +551,7 @@ V.project = async () => {
 V.usage = async () => {
   const u = await api("/usage?days=30");
   const rm = u.runs_this_month;
-  return `<h1>Usage & plan</h1><p class="sub">Plan: <b>${esc(u.plan)}</b>. Limits are enforced by the server. Prices are not set yet; plans are early hypotheses.</p>
+  return `<h1>Usage & plan</h1><p class="sub">Plan: <b>${esc(u.plan)}</b>. Limits are enforced by the server. Upgrade under <a href="#/billing">Plans & billing</a>.</p>
   <div class="grid"><div class="stat"><div class="k">Runs this month</div><div class="v">${int(rm.used)}</div><div class="n">${rm.included == null ? "no limit" : int(rm.included) + " included"}</div></div>
     <div class="stat"><div class="k">Overage</div><div class="v">${int(rm.overage)}</div><div class="n">${u.limits ? (u.limits.overage ? "billed beyond included" : "free plan: blocked at the limit") : "local mode"}</div></div>
     <div class="stat"><div class="k">Requests (30 days)</div><div class="v">${int(u.requests)}</div></div>
@@ -444,10 +567,10 @@ async function route() {
   const q = Object.fromEntries(new URLSearchParams(qs || ""));
   const [view, a, b] = path.split("/").map(decodeURIComponent);
   const table = { overview: V.overview, runs: a ? V.run : V.runs, datasets: a ? V.dataset : V.datasets, evals: a ? V.eval : V.evals,
-                  compare: V.compare, lab: a ? V.version : V.lab, project: V.project, usage: V.usage };
+                  compare: V.compare, lab: a ? V.version : V.lab, project: V.project, usage: V.usage, billing: V.billing };
   const fn = table[view] || V.overview;
   const navKey = view === "compare" ? "evals" : (table[view] ? view : "overview");
-  if (!S.pid && !["usage"].includes(view)) {
+  if (!S.pid && !["usage", "billing"].includes(view)) {
     shell(navKey, `<h1>Welcome</h1><p class="sub">Create a project to start, or call <code>SIAClient(project=...)</code> from your app.</p>
       <form class="row card" data-form="newproj"><input name="name" placeholder="my-ai-agent" required><button class="primary">Create project</button></form>`);
     return;
@@ -511,6 +634,25 @@ const FORMS = {
 };
 
 const ACTS = {
+  async pay(d) {
+    const o = await api("/billing/orders", { body: { plan: d.plan } });
+    await loadScript("https://checkout.razorpay.com/v1/checkout.js");
+    const rz = new window.Razorpay({
+      key: o.key_id, amount: o.amount, currency: o.currency, order_id: o.order_id, name: "SIA DevTools",
+      description: `${o.plan[0].toUpperCase() + o.plan.slice(1)} plan, 30 days`,
+      theme: { color: getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#5b4bdb" },
+      handler: async (resp) => {
+        try {
+          const r = await api("/billing/verify", { body: { order_id: resp.razorpay_order_id, payment_id: resp.razorpay_payment_id, signature: resp.razorpay_signature } });
+          toast(r.status === "paid" ? `Payment confirmed. You're on the ${r.plan} plan.` : r.detail);
+          S.me = await api("/me"); route();
+        } catch (e) { toast(e.message); }
+      },
+      modal: { ondismiss: () => toast("Payment window closed. Nothing was charged.") },
+    });
+    rz.on("payment.failed", (r) => toast("Payment failed: " + (r.error && r.error.description || "unknown error")));
+    rz.open();
+  },
   logout() { logout(); },
   async exportRuns() { await download(P() + "/runs/export", "runs.jsonl"); },
   async dl(d) { await download(d.path, d.file); },

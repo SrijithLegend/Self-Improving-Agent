@@ -24,9 +24,10 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from sia_devtools.errors import QuotaExceeded, SIAError
+from sia_devtools.errors import NotFound, QuotaExceeded, SIAError, ValidationError
 from sia_devtools.store import LOCAL_ORG, DevStore
 
+from . import billing
 from .agent import Agent
 from .llm import LLM, LLMError
 from .store import PLANS, Store
@@ -359,13 +360,26 @@ class ActivateIn(Strict):
     reviewer: str | None = Field(None, max_length=200)
 
 
+class OrderIn(Strict):
+    plan: Literal["pro", "team"]
+
+
+class VerifyIn(Strict):
+    order_id: str = Field(max_length=64)
+    payment_id: str = Field(max_length=64)
+    signature: str = Field(max_length=128)
+
+
 # --- service routes ------------------------------------------------------------
 @app.get("/", include_in_schema=False)
 @app.get("/dashboard", include_in_schema=False)
 def dashboard():
     return HTMLResponse(DASHBOARD.read_text(encoding="utf-8"), headers={
-        "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; "
-                                   "style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'",
+        # Razorpay's checkout script and payment window are the only third-party code the page may load
+        "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline' https://*.razorpay.com; "
+                                   "frame-src https://*.razorpay.com; connect-src 'self' https://*.razorpay.com; "
+                                   "style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.razorpay.com; "
+                                   "frame-ancestors 'none'",
         "Cache-Control": "no-store"})
 
 
@@ -392,6 +406,80 @@ def set_plan(org_id: str, body: PlanIn, x_admin_key: str = Header(default="")):
     if not store.set_plan(org_id, body.plan):
         raise HTTPException(404, "Organization not found.")
     return {"org_id": org_id, "plan": body.plan, "limits": PLANS[body.plan]}
+
+
+# --- billing (Razorpay) ------------------------------------------------------------
+def razorpay():
+    cfg = billing.settings()
+    if LOCAL_MODE or not (cfg["key_id"] and cfg["key_secret"]):
+        raise HTTPException(503, "Payments are not configured on this server (set RAZORPAY_KEY_ID and "
+                                 "RAZORPAY_KEY_SECRET).")
+    return billing.Razorpay(cfg["key_id"], cfg["key_secret"])
+
+
+@app.get("/v1/billing")
+def billing_status(t=Depends(tenant)):
+    cfg = billing.settings()
+    org = store.tenant(t["id"]) or {}
+    return {"enabled": bool(cfg["key_id"] and cfg["key_secret"]) and not LOCAL_MODE, "key_id": cfg["key_id"],
+            "currency": cfg["currency"], "prices": cfg["prices"], "plans": PLANS, "plan": t["plan"],
+            "paid_until": org.get("paid_until"), "period_days": 30, "payments": store.payments(t["id"])}
+
+
+@app.post("/v1/billing/orders", status_code=201)
+def create_order(body: OrderIn, t=Depends(tenant)):
+    """Create a Razorpay order for one 30-day period of a plan. The dashboard opens Razorpay Checkout with it."""
+    rzp, cfg = razorpay(), billing.settings()
+    amount = cfg["prices"][body.plan]
+    order = rzp.create_order(amount, cfg["currency"], f"sia-{t['id'][:12]}-{int(time.time())}",
+                             {"org_id": t["id"], "plan": body.plan})
+    store.add_payment(order["id"], t["id"], body.plan, amount, cfg["currency"])
+    return {"order_id": order["id"], "amount": amount, "currency": cfg["currency"], "key_id": cfg["key_id"],
+            "plan": body.plan, "org_name": t["name"]}
+
+
+def _confirm(order_id, payment_id, rzp_order):
+    """Activate the plan only if Razorpay says this order is fully paid in the amount we asked for."""
+    pay = store.payment(order_id)
+    if rzp_order.get("status") != "paid" or rzp_order.get("amount_paid") != pay["amount"]             or rzp_order.get("currency") != pay["currency"]:
+        return False
+    store.mark_paid(order_id, payment_id)
+    return True
+
+
+@app.post("/v1/billing/verify")
+def verify_payment(body: VerifyIn, t=Depends(tenant)):
+    """Checkout callback. The signature proves the ids came from Razorpay; the order is then re-fetched so a
+    payment that is authorized but not yet captured never activates a plan."""
+    pay = store.payment(body.order_id)
+    if not pay or pay["org_id"] != t["id"]:
+        raise NotFound("Order not found.")
+    if not billing.valid_payment_signature(body.order_id, body.payment_id, body.signature,
+                                           billing.settings()["key_secret"]):
+        raise ValidationError("Payment signature does not match.")
+    if pay["status"] != "paid" and not _confirm(body.order_id, body.payment_id, razorpay().order(body.order_id)):
+        return {"status": "pending", "detail": "Razorpay has not confirmed the payment yet; the plan switches as "
+                                                "soon as it does (via webhook)."}
+    org = store.tenant(t["id"])
+    return {"status": "paid", "plan": org["plan"], "paid_until": org["paid_until"]}
+
+
+@app.post("/v1/billing/webhook", include_in_schema=False)
+async def razorpay_webhook(request: Request):
+    """Point a Razorpay webhook (events: order.paid, payment.captured) at this URL."""
+    secret = billing.settings()["webhook_secret"]
+    if not secret:
+        raise HTTPException(503, "RAZORPAY_WEBHOOK_SECRET is not set.")
+    body = await request.body()
+    if not billing.valid_webhook_signature(body, request.headers.get("x-razorpay-signature", ""), secret):
+        raise HTTPException(400, "Invalid webhook signature.")
+    event = json.loads(body)
+    entity = (event.get("payload", {}).get("payment") or {}).get("entity") or {}
+    order_id = entity.get("order_id")
+    pay = store.payment(order_id) if order_id else None
+    if event.get("event") in ("order.paid", "payment.captured") and pay and entity.get("status") == "captured"             and entity.get("amount") == pay["amount"] and entity.get("currency") == pay["currency"]:
+        store.mark_paid(order_id, entity.get("id"))
+    return {"ok": True}  # 2xx for events we ignore too, so Razorpay doesn't retry them
 
 
 @app.get("/v1/me")
