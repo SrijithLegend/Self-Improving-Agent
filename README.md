@@ -55,27 +55,37 @@ python examples/demo.py
 
 ### Live demo results (2026-10-20, free `gemini-flash-latest`)
 
-Two real runs of `examples/demo.py`, each starting from an empty database: a deliberately fiddly refund policy
-(proration, fee floor/cap, EU override, finance approval, escalation contacts, fixed reply format) and 6
-hand-written graded examples. Each run made 67 LLM calls. Both ran **before** the eval changes described below.
+Three real runs of `examples/demo.py`, each starting from an empty database: a deliberately fiddly refund policy
+(proration, fee floor/cap, EU override, finance approval, escalation contacts, fixed reply format) and
+hand-written graded examples. Runs 1 and 2 used the original eval (6 examples). Run 3 used the more reliable
+eval described below (12 examples, grading at temperature 0, adoption only for gains beyond noise, 1 trial).
 
-| | Run 1 | Run 2 |
-|---|---|---|
-| Baseline on the 6 examples (no lessons, no playbook) | 0.60 | 0.95 |
-| 6 practice tasks | 0.8, 1.0, 1.0, 1.0, 1.0, 0.8 | 0.8, 1.0, 0.9, 1.0, 1.0, 0.8 |
-| Self-study, 3 generated questions | 1.0, 0.8, 1.0 | 1.0, 1.0, 0.8 |
-| Same 6 examples, with the learned lessons | 0.73 | 0.53 |
-| Candidate playbook on the same 6 examples | 0.65, not adopted | 0.67, adopted |
+| | Run 1 | Run 2 | Run 3 (new eval) |
+|---|---|---|---|
+| Eval examples | 6 | 6 | 12 |
+| Baseline (no lessons, no playbook) | 0.60 | 0.95 | 0.62 |
+| 6 practice tasks | 0.8, 1.0, 1.0, 1.0, 1.0, 0.8 | 0.8, 1.0, 0.9, 1.0, 1.0, 0.8 | 0.8, 1.0, 0.8, 1.0, 0.9, 1.0 |
+| Self-study, 3 generated questions | 1.0, 0.8, 1.0 | 1.0, 1.0, 0.8 | 1.0, 1.0, 0.8 |
+| Same examples, with the learned lessons | 0.73 | 0.53 | 0.62 |
+| Candidate playbook | 0.65, not adopted | 0.67, adopted | 0.66, not adopted |
+| LLM calls | 67 | 67 | 100 |
 
 **What this does and does not show.** The loop runs end to end on a free model: it revises weak answers,
 writes lessons that match the policy (for example "add three business days when a refund over $1,000 needs
-finance approval") and gates playbook changes on an eval. It does **not** show a reliable improvement. The
-same 6 examples scored 0.60 in one run and 0.95 in the other with nothing learned, and the learned lessons
-helped in run 1 (0.60 → 0.73) but scored below the baseline in run 2 (0.95 → 0.53). Six examples, graded by
-the model itself, are too noisy to tell real gains from luck, so run 2 adopted a playbook that still scored
-below its own baseline.
+finance approval") and gates playbook changes on an eval. It does **not** yet show a reliable improvement:
 
-Changes made after these runs to make the eval more reliable:
+- With the original eval, scores were too noisy to read. The same 6 examples scored 0.60 in one run and 0.95
+  in the other with nothing learned, and the lessons helped in run 1 (0.60 → 0.73) but hurt in run 2
+  (0.95 → 0.53). Run 2 even adopted a playbook that scored below its own baseline.
+- With the new eval (run 3), the baseline came out at 0.62, close to run 1's 0.60. The lessons made no
+  difference (0.62 → 0.62). The candidate playbook scored +0.04: that clears the old +0.02 bar, so the old
+  rule would have adopted it, but it did not beat the noise across the 12 examples, so it was refused.
+
+So the new eval stops the agent from adopting changes that only look better by luck. Whether learning gives a
+repeatable gain on this demo is still open; more runs, or `DEMO_TRIALS=2` to average two answers per example,
+would answer it.
+
+Changes made after runs 1 and 2 to make the eval more reliable:
 - the grader runs at temperature 0;
 - `improve` takes `trials` (1–3): each example is answered that many times per playbook and the scores averaged;
 - a candidate is adopted only if its average gain over the same examples beats both +0.02 and one standard
