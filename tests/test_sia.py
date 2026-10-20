@@ -221,7 +221,7 @@ def test_model_fallback_on_overload(monkeypatch):
 
 def test_api_flow_and_tenant_isolation(tmp_path, monkeypatch):
     monkeypatch.setenv("SIA_DB", str(tmp_path / "api.db"))
-    monkeypatch.setenv("SIA_ADMIN_KEY", "admin")
+    monkeypatch.setenv("SIA_ADMIN_KEY", "admin-key-for-tests-0123456789abcdef")
     import importlib
 
     from fastapi.testclient import TestClient
@@ -232,8 +232,8 @@ def test_api_flow_and_tenant_isolation(tmp_path, monkeypatch):
     c = TestClient(api.app)
 
     assert c.post("/v1/tenants", json={"name": "a"}).status_code == 403
-    k1 = c.post("/v1/tenants", json={"name": "a"}, headers={"X-Admin-Key": "admin"}).json()["api_key"]
-    k2 = c.post("/v1/tenants", json={"name": "b"}, headers={"X-Admin-Key": "admin"}).json()["api_key"]
+    k1 = c.post("/v1/tenants", json={"name": "a"}, headers={"X-Admin-Key": "admin-key-for-tests-0123456789abcdef"}).json()["api_key"]
+    k2 = c.post("/v1/tenants", json={"name": "b"}, headers={"X-Admin-Key": "admin-key-for-tests-0123456789abcdef"}).json()["api_key"]
     h1, h2 = {"Authorization": f"Bearer {k1}", "X-LLM-Key": "x"}, {"Authorization": f"Bearer {k2}"}
 
     assert c.get("/v1/agents").status_code == 401
@@ -285,7 +285,7 @@ def test_api_flow_and_tenant_isolation(tmp_path, monkeypatch):
 
 def test_api_rate_limit(tmp_path, monkeypatch):
     monkeypatch.setenv("SIA_DB", str(tmp_path / "rl.db"))
-    monkeypatch.setenv("SIA_ADMIN_KEY", "admin")
+    monkeypatch.setenv("SIA_ADMIN_KEY", "admin-key-for-tests-0123456789abcdef")
     monkeypatch.setenv("SIA_RATE_LIMIT", "3")
     import importlib
 
@@ -295,7 +295,7 @@ def test_api_rate_limit(tmp_path, monkeypatch):
     api = importlib.reload(sia.api)
     c = TestClient(api.app)
     h = {"Authorization": "Bearer " + c.post("/v1/tenants", json={"name": "a"},
-                                              headers={"X-Admin-Key": "admin"}).json()["api_key"]}
+                                              headers={"X-Admin-Key": "admin-key-for-tests-0123456789abcdef"}).json()["api_key"]}
     assert [c.get("/v1/agents", headers=h).status_code for _ in range(4)] == [200, 200, 200, 429]
     assert int(c.get("/v1/agents", headers=h).headers["Retry-After"]) > 0
 

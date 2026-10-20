@@ -213,7 +213,10 @@ def cmd_serve(a, local_db=None):
         os.environ.update(SIA_LOCAL_MODE="1", SIA_DB=local_db)
         a.host = "127.0.0.1"  # local mode has no keys, so never expose it beyond this machine
         print(f"SIA dashboard (local mode, {local_db}): http://127.0.0.1:{a.port}/dashboard")
-    uvicorn.run("sia.api:app", host=a.host, port=a.port)
+    # X-Forwarded-For/-Proto are believed only from these proxies (rate limits and HSTS rely on the real client
+    # address and scheme); the default trusts a proxy on this machine only
+    uvicorn.run("sia.api:app", host=a.host, port=a.port, proxy_headers=True, server_header=False,
+                forwarded_allow_ips=os.getenv("SIA_TRUSTED_PROXIES", "127.0.0.1"))
     return 0
 
 

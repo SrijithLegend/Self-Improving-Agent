@@ -13,9 +13,8 @@ import json
 import logging
 import os
 import secrets
-import threading
 import time
-from collections import defaultdict, deque
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -28,6 +27,7 @@ from sia_devtools.errors import NotFound, QuotaExceeded, SIAError, ValidationErr
 from sia_devtools.store import LOCAL_ORG, DevStore
 
 from . import billing
+from . import security as sec
 from .agent import Agent
 from .llm import LLM, LLMError
 from .store import PLANS, Store
@@ -38,13 +38,42 @@ app = FastAPI(title="SIA DevTools API", version="0.1.0",
 DB = os.getenv("SIA_DB", "sia.db")
 store, dev = Store(DB), DevStore(DB)
 LOCAL_MODE = os.getenv("SIA_LOCAL_MODE") == "1"
-MAX_BODY = int(os.getenv("SIA_MAX_BODY_BYTES", str(4 * 1024 * 1024)))
-# ponytail: in-memory per-process limiter; move to Redis/Postgres when running several instances.
-RATE_LIMIT = int(os.getenv("SIA_RATE_LIMIT", "120"))  # requests per org per minute; 0 = unlimited
-_hits, _hits_lock = defaultdict(deque), threading.Lock()
-log = logging.getLogger("sia.access")
+MAX_BODY = sec.env_int("SIA_MAX_BODY_BYTES", 4 * 1024 * 1024)
+# Throttles (in-memory, per process: see sia/security.py). 0 turns one off.
+RATE_LIMIT = sec.env_int("SIA_RATE_LIMIT", 120)  # requests per organization per minute
+org_hits = sec.Window(RATE_LIMIT, 60)
+ip_hits = sec.Window(sec.env_int("SIA_IP_RATE_LIMIT", 600), 60)  # requests per client IP per minute
+auth_fails = sec.Window(sec.env_int("SIA_AUTH_FAIL_LIMIT", 20), 600)  # bad keys per IP per 10 min, then 429
+llm_slots = sec.Slots(sec.env_int("SIA_LLM_CONCURRENCY_PER_ORG", 2), sec.env_int("SIA_LLM_CONCURRENCY", 16))
+log, seclog = logging.getLogger("sia.access"), logging.getLogger("sia.security")
 DASHBOARD = Path(__file__).with_name("dashboard.html")
-WEB = Path(__file__).resolve().parents[1] / "web"  # landing page, mounted at / after every route
+DASHBOARD_HTML = DASHBOARD.read_text(encoding="utf-8")
+DASHBOARD_CSP = sec.dashboard_csp(DASHBOARD_HTML)
+# landing page, mounted at / after every route (the Docker image sets SIA_WEB_DIR)
+WEB = Path(os.getenv("SIA_WEB_DIR") or Path(__file__).resolve().parents[1] / "web")
+LANDING_CSP = sec.landing_csp((WEB / "index.html").read_text(encoding="utf-8")) if (WEB / "index.html").is_file() \
+    else sec.API_CSP
+NO_CSP = ("/docs", "/redoc")  # FastAPI's API docs load their own scripts from a CDN
+
+# outermost first: Host allowlist, then the body limit, then guard_and_log below
+if os.getenv("SIA_ALLOWED_HOSTS"):
+    from starlette.middleware.trustedhost import TrustedHostMiddleware
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[h.strip() for h in os.environ["SIA_ALLOWED_HOSTS"]
+                       .split(",") if h.strip()] + ["127.0.0.1", "localhost"])  # localhost: the health check
+app.add_middleware(sec.BodyLimit, max_bytes=MAX_BODY)
+if not LOCAL_MODE and sec.admin_key_problem(os.getenv("SIA_ADMIN_KEY", "")):
+    seclog.warning("admin API disabled: %s", sec.admin_key_problem(os.getenv("SIA_ADMIN_KEY", "")))
+
+
+def client_ip(request: Request):
+    # behind a reverse proxy this is the real client only if uvicorn trusts the proxy (SIA_TRUSTED_PROXIES)
+    return request.client.host if request.client else "unknown"
+
+
+def security_event(request: Request, event, **extra):
+    seclog.warning(json.dumps({"ts": round(time.time(), 3), "event": event, "ip": client_ip(request),
+                               "path": request.url.path, "request_id": getattr(request.state, "request_id", None),
+                               **extra}))
 
 
 @app.exception_handler(SIAError)
@@ -54,18 +83,35 @@ def sia_error(request: Request, e: SIAError):
 
 @app.middleware("http")
 async def guard_and_log(request: Request, call_next):
-    """Reject oversized bodies, add security headers, and log one JSON line per request (no headers, no query
-    strings, no bodies: those can hold keys or personal data)."""
+    """Throttle per client IP, add security headers and a request id, hide internal errors, and log one JSON line
+    per request (no headers, no query strings, no bodies: those can hold keys or personal data)."""
     t0 = time.perf_counter()
-    if int(request.headers.get("content-length") or 0) > MAX_BODY:
-        response = JSONResponse({"detail": f"Request body over {MAX_BODY} bytes."}, 413)
+    rid = request.headers.get("x-request-id", "")
+    request.state.request_id = rid if sec.SAFE_REQUEST_ID.match(rid) else uuid.uuid4().hex[:16]
+    path = request.url.path
+    retry = 0 if LOCAL_MODE or path == "/health" else ip_hits.retry_after(client_ip(request))
+    if retry:
+        response = JSONResponse({"detail": "Too many requests from this address."}, 429,
+                                headers={"Retry-After": str(retry)})
     else:
-        response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    log.info(json.dumps({"ts": round(time.time(), 3), "method": request.method, "path": request.url.path,
+        try:
+            response = await call_next(request)
+        except Exception:  # never send a stack trace to the client; the request id finds it in the log
+            log.exception("unhandled error, request_id=%s", request.state.request_id)
+            response = JSONResponse({"detail": "Internal server error.", "request_id": request.state.request_id}, 500)
+    h = response.headers
+    h.update(sec.COMMON_HEADERS)
+    h["X-Request-ID"] = request.state.request_id
+    if request.url.scheme == "https":
+        h["Strict-Transport-Security"] = sec.HSTS
+    if "content-security-policy" not in h and not path.startswith(NO_CSP):
+        h["Content-Security-Policy"] = LANDING_CSP if h.get("content-type", "").startswith("text/html") \
+            else sec.API_CSP
+    if path.startswith("/v1/"):
+        h.setdefault("Cache-Control", "no-store")  # API data may be private: never keep it in shared caches
+    log.info(json.dumps({"ts": round(time.time(), 3), "method": request.method, "path": path,
                          "status": response.status_code, "ms": round((time.perf_counter() - t0) * 1000, 1),
-                         "org": getattr(request.state, "org", None)}))
+                         "org": getattr(request.state, "org", None), "request_id": request.state.request_id}))
     return response
 
 
@@ -77,26 +123,26 @@ def key_auth(request: Request, authorization: str = Header(default="")):
     """Any valid key (full or ingest scope)."""
     if LOCAL_MODE:
         # no keys here, so refuse anything not from and addressed to this machine (the Host check stops DNS
-        # rebinding: a web page on evil.example pointing its DNS at 127.0.0.1 still sends Host: evil.example)
+        # rebinding: a web page on evil.example pointing its DNS at 127.0.0.1 still sends Host: evil.example;
+        # forwarding headers mean a reverse proxy put this machine on the network)
         host = (request.headers.get("host") or "").rsplit(":", 1)[0].strip("[]")
-        if (request.client.host if request.client else "") not in LOOPBACK or host not in LOOPBACK | {"testserver"}:
+        if (request.client.host if request.client else "") not in LOOPBACK or host not in LOOPBACK | {"testserver"} \
+                or sec.forwarded(request.headers):
             raise HTTPException(403, "Local mode only serves this machine.")
         t = {"id": LOCAL_ORG, "name": "local", "plan": "local", "key_id": "local", "scope": "full"}
     else:
+        ip = client_ip(request)
+        if retry := auth_fails.blocked(ip):
+            raise sec.too_many(retry, "Too many invalid API keys from this address; try again later.")
         key = authorization.removeprefix("Bearer ").strip()
-        t = store.tenant_by_key(key) if key else None
+        t = store.tenant_by_key(key) if key and len(key) <= 200 else None
         if not t:
+            auth_fails.add(ip)
+            security_event(request, "invalid_api_key")
             raise HTTPException(401, "Invalid, revoked or missing API key (Authorization: Bearer <key>).")
     request.state.org = t["id"]
-    if RATE_LIMIT and not LOCAL_MODE:
-        now = time.monotonic()
-        with _hits_lock:
-            q = _hits[t["id"]]
-            while q and now - q[0] > 60:
-                q.popleft()
-            if len(q) >= RATE_LIMIT:
-                raise HTTPException(429, "Rate limit exceeded.", headers={"Retry-After": str(int(61 - (now - q[0])))})
-            q.append(now)
+    if not LOCAL_MODE and (retry := org_hits.retry_after(t["id"])):
+        raise sec.too_many(retry, "Rate limit exceeded.")
     return t
 
 
@@ -119,9 +165,16 @@ def month_start():
     return datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
 
 
-def require_admin(x_admin_key):
+def require_admin(request: Request, x_admin_key: str):
     admin = os.getenv("SIA_ADMIN_KEY", "")
-    if not admin or not secrets.compare_digest(x_admin_key.encode(), admin.encode()):
+    if problem := sec.admin_key_problem(admin):
+        raise HTTPException(503, f"The admin API is disabled: {problem}.")
+    ip = client_ip(request)
+    if retry := auth_fails.blocked(ip):
+        raise sec.too_many(retry, "Too many invalid keys from this address; try again later.")
+    if not secrets.compare_digest(x_admin_key.encode(), admin.encode()):
+        auth_fails.add(ip)
+        security_event(request, "invalid_admin_key")
         raise HTTPException(403, "Admin key required.")
 
 
@@ -143,11 +196,13 @@ def owned_agent(agent_id: str, t=Depends(tenant)):
 
 
 def metered(request: Request, a, model, fn, *args):
-    """Run an LLM-using action, record its LLM calls for billing (even if it fails), add llm_calls."""
-    try:
-        return {**call(fn, *args), "llm_calls": model.calls}
-    finally:
-        store.record_usage(a["tenant_id"], a["id"], request.url.path.rsplit("/", 1)[-1], model.calls)
+    """Run an LLM-using action, record its LLM calls for billing (even if it fails), add llm_calls. Capped per
+    organization and in total, since these hold a worker thread for as long as the model takes."""
+    with llm_slots.take(a["tenant_id"]):
+        try:
+            return {**call(fn, *args), "llm_calls": model.calls}
+        finally:
+            store.record_usage(a["tenant_id"], a["id"], request.url.path.rsplit("/", 1)[-1], model.calls)
 
 
 def call(fn, *args, **kwargs):
@@ -374,13 +429,7 @@ class VerifyIn(Strict):
 # --- service routes ------------------------------------------------------------
 @app.get("/dashboard", include_in_schema=False)
 def dashboard():
-    return HTMLResponse(DASHBOARD.read_text(encoding="utf-8"), headers={
-        # Razorpay's checkout script and payment window are the only third-party code the page may load
-        "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline' https://*.razorpay.com; "
-                                   "frame-src https://*.razorpay.com; connect-src 'self' https://*.razorpay.com; "
-                                   "style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.razorpay.com; "
-                                   "frame-ancestors 'none'",
-        "Cache-Control": "no-store"})
+    return HTMLResponse(DASHBOARD_HTML, headers={"Content-Security-Policy": DASHBOARD_CSP, "Cache-Control": "no-store"})
 
 
 @app.get("/health")
@@ -393,16 +442,16 @@ def health():
 
 
 @app.post("/v1/tenants", status_code=201)
-def create_tenant(body: TenantIn, x_admin_key: str = Header(default="")):
-    require_admin(x_admin_key)
+def create_tenant(body: TenantIn, request: Request, x_admin_key: str = Header(default="")):
+    require_admin(request, x_admin_key)
     return store.create_tenant(body.name)  # the api_key is shown only once
 
 
 @app.post("/v1/admin/orgs/{org_id}/plan")
-def set_plan(org_id: str, body: PlanIn, x_admin_key: str = Header(default="")):
+def set_plan(org_id: str, body: PlanIn, request: Request, x_admin_key: str = Header(default="")):
     """Payment integration boundary: call this from your billing provider's webhook once a payment is confirmed.
     SIA never handles card data and never assumes a payment succeeded."""
-    require_admin(x_admin_key)
+    require_admin(request, x_admin_key)
     if not store.set_plan(org_id, body.plan):
         raise HTTPException(404, "Organization not found.")
     return {"org_id": org_id, "plan": body.plan, "limits": PLANS[body.plan]}
@@ -472,8 +521,14 @@ async def razorpay_webhook(request: Request):
         raise HTTPException(503, "RAZORPAY_WEBHOOK_SECRET is not set.")
     body = await request.body()
     if not billing.valid_webhook_signature(body, request.headers.get("x-razorpay-signature", ""), secret):
+        security_event(request, "invalid_webhook_signature")
         raise HTTPException(400, "Invalid webhook signature.")
-    event = json.loads(body)
+    try:
+        event = json.loads(body)
+    except ValueError:
+        event = None
+    if not isinstance(event, dict):
+        raise HTTPException(400, "Webhook body is not a JSON object.")
     entity = (event.get("payload", {}).get("payment") or {}).get("entity") or {}
     order_id = entity.get("order_id")
     pay = store.payment(order_id) if order_id else None

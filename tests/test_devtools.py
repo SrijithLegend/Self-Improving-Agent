@@ -451,7 +451,7 @@ def test_no_evidence_means_no_proposal(sia):
 # --- hosted API + security -----------------------------------------------------------
 def make_api(tmp_path, monkeypatch, **env):
     monkeypatch.setenv("SIA_DB", str(tmp_path / "api.db"))
-    monkeypatch.setenv("SIA_ADMIN_KEY", "admin")
+    monkeypatch.setenv("SIA_ADMIN_KEY", "admin-key-for-tests-0123456789abcdef")
     monkeypatch.delenv("SIA_LOCAL_MODE", raising=False)
     for k, v in env.items():
         monkeypatch.setenv(k, v)
@@ -461,7 +461,7 @@ def make_api(tmp_path, monkeypatch, **env):
 
 
 def org(c):
-    return c.post("/v1/tenants", json={"name": "o"}, headers={"X-Admin-Key": "admin"}).json()
+    return c.post("/v1/tenants", json={"name": "o"}, headers={"X-Admin-Key": "admin-key-for-tests-0123456789abcdef"}).json()
 
 
 def hosted(api, key, project="shop-bot"):
@@ -592,7 +592,7 @@ def test_plan_limits_are_enforced_server_side(tmp_path, monkeypatch):
     assert c.post(f"/v1/projects/{pid}/runs", json={"runs": [{"id": "c", "name": "n"}]}, headers=h).status_code == 402
     assert c.post(f"/v1/admin/orgs/{o['tenant_id']}/plan", json={"plan": "pro"}).status_code == 403
     assert c.post(f"/v1/admin/orgs/{o['tenant_id']}/plan", json={"plan": "pro"},
-                  headers={"X-Admin-Key": "admin"}).status_code == 200
+                  headers={"X-Admin-Key": "admin-key-for-tests-0123456789abcdef"}).status_code == 200
     monkeypatch.setitem(api.PLANS["pro"], "runs_per_month", 2)
     assert c.post(f"/v1/projects/{pid}/runs", json={"runs": [{"id": "c", "name": "n"}]}, headers=h).status_code == 202
     u = c.get("/v1/usage", headers=h).json()

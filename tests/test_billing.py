@@ -42,7 +42,7 @@ def sign(msg, secret):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    for k, v in {"SIA_DB": str(tmp_path / "b.db"), "SIA_ADMIN_KEY": "admin", "RAZORPAY_KEY_ID": "rzp_test_x",
+    for k, v in {"SIA_DB": str(tmp_path / "b.db"), "SIA_ADMIN_KEY": "admin-key-for-tests-0123456789abcdef", "RAZORPAY_KEY_ID": "rzp_test_x",
                  "RAZORPAY_KEY_SECRET": SECRET, "RAZORPAY_WEBHOOK_SECRET": HOOK}.items():
         monkeypatch.setenv(k, v)
     monkeypatch.delenv("SIA_LOCAL_MODE", raising=False)
@@ -51,7 +51,7 @@ def env(tmp_path, monkeypatch):
     FakeRazorpay.orders = {}
     monkeypatch.setattr(api.billing, "Razorpay", FakeRazorpay)
     c = TestClient(api.app)
-    org = c.post("/v1/tenants", json={"name": "acme"}, headers={"X-Admin-Key": "admin"}).json()
+    org = c.post("/v1/tenants", json={"name": "acme"}, headers={"X-Admin-Key": "admin-key-for-tests-0123456789abcdef"}).json()
     return api, c, org, {"Authorization": f"Bearer {org['api_key']}"}
 
 
@@ -86,7 +86,7 @@ def test_forged_or_foreign_payments_are_refused(env):
     FakeRazorpay.pay(o["order_id"])
     bad = {"order_id": o["order_id"], "payment_id": "pay_1", "signature": "0" * 64}
     assert c.post("/v1/billing/verify", json=bad, headers=h).status_code == 400
-    other = c.post("/v1/tenants", json={"name": "b"}, headers={"X-Admin-Key": "admin"}).json()
+    other = c.post("/v1/tenants", json={"name": "b"}, headers={"X-Admin-Key": "admin-key-for-tests-0123456789abcdef"}).json()
     hb = {"Authorization": f"Bearer {other['api_key']}"}
     good = {**bad, "signature": sign(f"{o['order_id']}|pay_1".encode(), SECRET)}
     assert c.post("/v1/billing/verify", json=good, headers=hb).status_code == 404  # someone else's order

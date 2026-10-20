@@ -19,6 +19,9 @@ OPENAI_COMPATIBLE = {
 PROVIDERS = {"gemini", "anthropic", *OPENAI_COMPATIBLE}
 # Comma-separated = fallback chain: free models get overloaded (503), so try the next one.
 DEFAULT_MODELS = {"gemini": "gemini-flash-latest,gemini-flash-lite-latest", "anthropic": "claude-haiku-5-5"}
+# model names go into request URLs (Gemini) and come from a request header, so only plain names are accepted
+MODEL_RX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$")
+MAX_FALLBACKS = 4
 
 
 class LLMError(Exception):
@@ -37,6 +40,8 @@ class LLM:
         # A caller-chosen base URL lets a hosted server be pointed at internal hosts (SSRF), so it is opt-in.
         if base_url and os.getenv("SIA_ALLOW_CUSTOM_BASE_URL") != "1":
             raise LLMError("Custom base URLs are disabled on this server (set SIA_ALLOW_CUSTOM_BASE_URL=1).")
+        if base_url and not re.match(r"^https?://[^\s/?#]+(/[^\s?#]*)?$", base_url):
+            raise LLMError("X-LLM-Base-URL must be an http(s) URL without a query string.")
         if provider == "ollama" and not base_url and os.getenv("SIA_ALLOW_CUSTOM_BASE_URL") != "1":
             raise LLMError("Ollama (localhost) is only available on self-hosted servers.")
         if not api_key and provider != "ollama":
@@ -44,13 +49,16 @@ class LLM:
         self.models = [m.strip() for m in (model or DEFAULT_MODELS.get(provider, "")).split(",") if m.strip()]
         if not self.models:
             raise LLMError(f"Provider '{provider}' needs an explicit model name.")
+        if len(self.models) > MAX_FALLBACKS or any(not MODEL_RX.match(m) or ".." in m for m in self.models):
+            raise LLMError(f"Invalid model name (letters, digits and . _ : / @ -; at most {MAX_FALLBACKS} "
+                           "comma-separated fallbacks).")
         self.model = self.models[0]
         self.tries = 7 if len(self.models) == 1 else 3  # with fallbacks, move on sooner
         self.provider, self.api_key = provider, api_key
         self.base_url = (base_url or OPENAI_COMPATIBLE.get(provider, "")).rstrip("/")
         self.calls = 0
         self.last_usage = {}  # {"model", "prompt_tokens", "completion_tokens"} of the latest successful call
-        self.http = httpx.Client(timeout=httpx.Timeout(90, connect=10))
+        self.http = httpx.Client(timeout=httpx.Timeout(90, connect=10))  # no redirects: they could reach elsewhere
 
     def text(self, system, prompt, temperature=0.7, as_json=False):
         self.calls += 1
@@ -116,7 +124,7 @@ class LLM:
                 r = self.http.post(url, headers=headers, json=body)
             except httpx.HTTPError as e:
                 if attempt == tries - 1:
-                    raise Unavailable(f"Network error calling {self.provider}: {e}")
+                    raise Unavailable(self._clean(f"Network error calling {self.provider}: {e}"))
                 time.sleep(2 ** attempt)
                 continue
             # Free tiers rate-limit hard; back off and retry instead of failing the task.
@@ -125,10 +133,14 @@ class LLM:
                 time.sleep(min(float(retry_after) if retry_after.isdigit() else 2 ** (attempt + 1), 60))
                 continue
             if r.status_code in (429, 500, 502, 503, 504):
-                raise Unavailable(f"{self.provider} error {r.status_code}: {r.text[:300]}")
+                raise Unavailable(self._clean(f"{self.provider} error {r.status_code}: {r.text[:300]}"))
             if r.status_code >= 400:
-                raise LLMError(f"{self.provider} error {r.status_code}: {r.text[:500]}")
+                raise LLMError(self._clean(f"{self.provider} error {r.status_code}: {r.text[:500]}"))
             return r.json()
+
+    def _clean(self, text):
+        """Provider errors are returned to the caller; never let them carry the key back out (or into logs)."""
+        return text.replace(self.api_key, "***") if self.api_key else text
 
 
 def parse_json(raw):
