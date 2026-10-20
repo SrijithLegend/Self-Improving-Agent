@@ -13,12 +13,9 @@ Works with: Gemini, Claude, OpenAI, Groq, Ollama (also OpenRouter, Together, Mis
 
 ## Mission
 
-Most agents forget everything between calls. Every conversation starts from the same prompt, so the correction a
-user gave yesterday is lost by tomorrow, and the same mistake comes back.
+Most agents forget everything between calls. Every conversation starts from the same prompt, so the correction a user gave yesterday is lost by tomorrow, and the same mistake comes back.
 
-Fine-tuning can fix that, but it is costly, slow to repeat and ties you to one provider. SIA keeps what an agent
-learns as readable text instead: short lessons, a playbook and your own documents. You can inspect any of it, veto
-a lesson you disagree with and roll the playbook back to an earlier version.
+Fine-tuning can fix that, but it is costly, slow to repeat and ties you to one provider. SIA keeps what an agent learns as readable text instead: short lessons, a playbook and your own documents. You can inspect any of it, veto a lesson you disagree with and roll the playbook back to an earlier version.
 
 ## How it learns
 
@@ -30,8 +27,7 @@ Also: feedback, self-study, rollback, bring your own key.
 
 ## API in 60 seconds
 
-Every call takes your SIA key (`Authorization: Bearer $SIA_KEY`). Calls that use a model also take your own model
-key (`X-LLM-Provider`, default `gemini`, and `X-LLM-Key`), which is used for that request and never stored.
+Every call takes your SIA key (`Authorization: Bearer $SIA_KEY`). Calls that use a model also take your own model key (`X-LLM-Provider`, default `gemini`, and `X-LLM-Key`), which is used for that request and never stored.
 
 ```bash
 # helper: POSTs when -d is given, GETs otherwise
@@ -54,8 +50,7 @@ sia /v1/agents/$ID/run -d '{"task":"Can I claim my PPF under 80C?"}'
 sia /v1/agents/$ID/feedback -d '{"episode_id":"...","rating":2,"correction":"..."}'
 ```
 
-Errors: `400` bad input or LLM config, `401` bad SIA key, `404` not found, `429` rate limit, `502` the LLM
-provider failed.
+Errors: `400` bad input or LLM config, `401` bad SIA key, `404` not found, `429` rate limit, `502` the LLM provider failed.
 
 ## Setup prompt for a coding agent
 
@@ -71,8 +66,7 @@ Integrate the SIA self-improving agent API into this project.
 
 ## Results
 
-Two real runs of `examples/demo.py` on the free `gemini-flash-latest` model, each from an empty database, scored
-on the same six hand-written examples of a refund policy.
+Two real runs of `examples/demo.py` on the free `gemini-flash-latest` model, each from an empty database, scored on the same six hand-written examples of a refund policy.
 
 | Score | Run 1 | Run 2 |
 |---|---|---|
@@ -80,14 +74,11 @@ on the same six hand-written examples of a refund policy.
 | With learned lessons | 0.73 | 0.53 |
 | Candidate playbook | 0.65, not adopted | 0.67, adopted |
 
-*Six examples graded by the model are too noisy to prove a gain. We're expanding the eval set and will publish the
-next run here.*
+*Six examples graded by the model are too noisy to prove a gain. We're expanding the eval set and will publish the next run here.*
 
 ## Pricing
 
-- **Self-host: free.** Run it with Docker on your own machine or server, with your own model keys. Your data stays
-  in your database, and the source is on GitHub under the project's license.
-  `docker build -t sia . && docker run -p 8000:8000 -v sia-data:/data --env-file .env sia`
+- **Self-host: free.** Run it with Docker on your own machine or server, with your own model keys. Your data stays in your database, and the source is on GitHub under the project's license. `docker build -t sia . && docker run -p 8000:8000 -v sia-data:/data --env-file .env sia`
 - **Hosted: coming soon.** No prices yet.
 
 © 2026 SIA
