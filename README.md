@@ -378,9 +378,14 @@ history) showed the loop working on a free model; learned lessons helped in one 
 | `SIA_LOCAL_DB` | `sia_local.db` | SDK/CLI local mode file |
 | `SIA_PROJECT` | `default` | CLI project |
 | `SIA_DB` | `sia.db` | server database |
-| `SIA_ADMIN_KEY` | unset | required for `/v1/tenants` and plan changes |
+| `SIA_ADMIN_KEY` | unset | required for `/v1/tenants` and plan changes; 32+ random characters, or the admin API stays off |
 | `SIA_RATE_LIMIT` | `120` | requests per organization per minute, `0` = off |
-| `SIA_MAX_BODY_BYTES` | `4194304` | larger bodies get `413` |
+| `SIA_IP_RATE_LIMIT` | `600` | requests per client IP per minute, `0` = off |
+| `SIA_AUTH_FAIL_LIMIT` | `20` | invalid keys per IP per 10 minutes before that IP gets `429` |
+| `SIA_LLM_CONCURRENCY_PER_ORG`, `SIA_LLM_CONCURRENCY` | `2`, `16` | model-calling requests running at once, per organization and in total |
+| `SIA_MAX_BODY_BYTES` | `4194304` | larger bodies get `413` (chunked uploads included) |
+| `SIA_TRUSTED_PROXIES` | `127.0.0.1` | proxies whose `X-Forwarded-For`/`-Proto` are believed (`sia serve`) |
+| `SIA_ALLOWED_HOSTS` | unset | comma-separated hostnames; other `Host` headers get `400` |
 | `SIA_LOCAL_MODE` | unset | `1` = no keys, loopback only (set by `sia dashboard`) |
 | `SIA_ALLOW_CUSTOM_BASE_URL` | unset | managed agents: allow custom LLM URLs and Ollama |
 | `HOST`, `PORT` | `127.0.0.1`, `8000` | `sia serve` |
@@ -469,8 +474,16 @@ Billing endpoints: `GET /v1/billing`, `POST /v1/billing/orders`, `POST /v1/billi
   reaches candidate generation. Locked text and the evaluation policy can't be changed by a candidate.
 - **Local mode** has no keys, so it answers only loopback clients whose `Host` header is localhost (blocks DNS
   rebinding). `sia dashboard` always binds to 127.0.0.1.
-- **Logs:** one JSON line per request (method, path, status, duration, organization). No headers, query strings or
-  bodies.
+- **Logs:** one JSON line per request (method, path, status, duration, organization, request id). No headers, query
+  strings or bodies. Failed keys and bad webhook signatures are also logged as `sia.security` events with the IP.
+- **Hardening:** per-IP and per-organization rate limits, a lockout after repeated invalid keys, a body limit that
+  also counts chunked uploads, caps on concurrent model calls, a strict Content-Security-Policy and the usual
+  security headers, HSTS over https, `no-store` on API data, and internal errors that return only a request id.
+  The admin API refuses to run with a weak key.
+
+**Before going to production, read [SECURITY.md](SECURITY.md)**: the threat model, a production checklist (HTTPS,
+trusted proxies, Host allowlist, edge rate limits) and what changes when you scale. An nginx example is in
+[`examples/deploy/nginx.conf`](examples/deploy/nginx.conf).
 
 ---
 
@@ -508,6 +521,6 @@ web/                        # landing page served at / (static, no build step; s
 examples/devtools_demo.py   # the end-to-end demo above
 examples/ci/sia-gate.yml    # GitHub Actions gate example
 examples/demo.py            # the original managed-agent demo
-tests/                      # 51 offline tests (no API keys)
+tests/                      # 65 offline tests (no API keys)
 docs/AUDIT.md               # audit, what was built, readiness assessment
 ```

@@ -13,3 +13,16 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install ".[dev]"
       - run: python -m pytest -q
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --upgrade pip && pip install ".[server]" pip-audit==2.9.0 bandit==1.8.6
+      # known vulnerabilities in the installed dependencies
+      - run: pip-audit --skip-editable
+      # code scan, medium severity and up. B608 (string-built SQL) is skipped: every dynamic fragment was
+      # reviewed and is a fixed string or a whitelisted column name, and all values are bound parameters.
+      - run: bandit -q -r sia sia_devtools -ll --skip B608
