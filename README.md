@@ -109,7 +109,7 @@ print(result["summary"])   # {'n': 1, 'score': ..., 'pass_rate': ..., 'by_scorer
 **4. Look at it:**
 
 ```bash
-sia dashboard            # http://127.0.0.1:8000, reads sia_local.db, this machine only
+sia dashboard            # http://127.0.0.1:8000/dashboard, reads sia_local.db, this machine only
 ```
 
 **5. See the whole loop** with fictional data:
@@ -281,7 +281,7 @@ scripted model whose behaviour is hard-coded, so its numbers show the mechanics 
 
 ## 🖥 Dashboard
 
-Served by the API at `/` (`sia serve`) or for local mode with `sia dashboard`. It reads only real stored data.
+Served by the API at `/dashboard` (`sia serve`) or for local mode with `sia dashboard`. It reads only real stored data.
 
 | Screen | What you can do |
 |---|---|

@@ -577,7 +577,7 @@ def test_server_side_redaction_limits_and_validation(tmp_path, monkeypatch):
     assert c.post(f"/v1/projects/{pid}/runs", json={"runs": [{"id": "r3", "name": "n", "status": "weird"}]},
                   headers=h).status_code == 422
     assert c.patch(f"/v1/projects/{pid}", json={"settings": {"redact": ["("]}}, headers=h).status_code == 400
-    assert c.get("/health").json()["ok"] and c.get("/").status_code == 200
+    assert c.get("/health").json()["ok"] and c.get("/dashboard").status_code == 200
 
 
 def test_plan_limits_are_enforced_server_side(tmp_path, monkeypatch):

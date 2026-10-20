@@ -44,6 +44,7 @@ RATE_LIMIT = int(os.getenv("SIA_RATE_LIMIT", "120"))  # requests per org per min
 _hits, _hits_lock = defaultdict(deque), threading.Lock()
 log = logging.getLogger("sia.access")
 DASHBOARD = Path(__file__).with_name("dashboard.html")
+WEB = Path(__file__).resolve().parents[1] / "web"  # landing page, mounted at / after every route
 
 
 @app.exception_handler(SIAError)
@@ -371,7 +372,6 @@ class VerifyIn(Strict):
 
 
 # --- service routes ------------------------------------------------------------
-@app.get("/", include_in_schema=False)
 @app.get("/dashboard", include_in_schema=False)
 def dashboard():
     return HTMLResponse(DASHBOARD.read_text(encoding="utf-8"), headers={
@@ -887,3 +887,9 @@ def activate_playbook(version: int, a=Depends(owned_agent)):
     if not store.activate_playbook(a["id"], version):
         raise HTTPException(404, "Playbook version not found.")
     return {"active_version": version}
+
+
+# The landing page. Mounted last: routes registered above (/docs, /health, /v1/*, /dashboard) take priority.
+if WEB.is_dir():  # a pip install ships the API without the landing page
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/", StaticFiles(directory=WEB, html=True), name="web")

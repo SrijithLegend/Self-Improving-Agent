@@ -212,7 +212,7 @@ def cmd_serve(a, local_db=None):
     if local_db:
         os.environ.update(SIA_LOCAL_MODE="1", SIA_DB=local_db)
         a.host = "127.0.0.1"  # local mode has no keys, so never expose it beyond this machine
-        print(f"SIA dashboard (local mode, {local_db}): http://127.0.0.1:{a.port}/")
+        print(f"SIA dashboard (local mode, {local_db}): http://127.0.0.1:{a.port}/dashboard")
     uvicorn.run("sia.api:app", host=a.host, port=a.port)
     return 0
 

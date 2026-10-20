@@ -298,3 +298,18 @@ def test_api_rate_limit(tmp_path, monkeypatch):
                                               headers={"X-Admin-Key": "admin"}).json()["api_key"]}
     assert [c.get("/v1/agents", headers=h).status_code for _ in range(4)] == [200, 200, 200, 429]
     assert int(c.get("/v1/agents", headers=h).headers["Retry-After"]) > 0
+
+
+def test_landing_page_is_served_without_shadowing_the_api(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIA_DB", str(tmp_path / "web.db"))
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    import sia.api
+    c = TestClient(importlib.reload(sia.api).app)
+    r = c.get("/")
+    assert r.status_code == 200 and "self-improving" in r.text
+    assert c.get("/health").json()["ok"] and c.get("/docs").status_code == 200
+    assert c.get("/v1/me").status_code == 401 and c.get("/dashboard").status_code == 200
+    assert c.get("/llms.txt").status_code == 200 and c.get("/agent.md").status_code == 200
