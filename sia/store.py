@@ -290,11 +290,12 @@ class Store:
         last_improve = self.q("SELECT MAX(created) t FROM playbooks WHERE agent_id=?", agent_id)[0]["t"] or 0
         since = self.q("SELECT COUNT(*) n FROM episodes WHERE agent_id=? AND created>?", agent_id, last_improve)[0]["n"]
         avg = lambda xs: round(sum(xs) / len(xs), 3) if xs else None
+        half = min(20, len(scores) // 2)  # first/last windows never overlap
         count = lambda t: self.q(f"SELECT COUNT(*) n FROM {t} WHERE agent_id=?", agent_id)[0]["n"]
         return {
             "episodes": len(scores),
-            "avg_score_first_20": avg(scores[:20]),
-            "avg_score_last_20": avg(scores[-20:]),
+            "avg_score_first_20": avg(scores[:half]),
+            "avg_score_last_20": avg(scores[len(scores) - half:] if half else []),
             "active_lessons": self.q("SELECT COUNT(*) n FROM lessons WHERE agent_id=? AND active=1", agent_id)[0]["n"],
             "documents": count("docs"),
             "eval_examples": count("examples"),

@@ -70,30 +70,40 @@ class Agent:
     def run(self, task, learn=True, max_revisions=2, expected=None):
         system, lessons, knowledge = self._context(task)
         answer = self.llm.text(system, task)
+        ids, used = [l["id"] for l in lessons], [l["text"] for l in lessons]
         if not learn:
-            return {"answer": answer, "score": None, "episode_id": None, "attempts": 1, "critique": None,
-                    "lessons_used": [l["text"] for l in lessons], "new_lessons": []}
+            # still recorded (unscored) so users can rate or correct fast answers too
+            eid = self.store.add_episode(self.a["id"], task, answer, None, None, 1, ids)
+            return {"answer": answer, "score": None, "episode_id": eid, "attempts": 1, "critique": None,
+                    "lessons_used": used, "new_lessons": []}
 
-        draft = answer
-        verdict = self.critique(task, answer, knowledge, expected)
-        best, attempts = (verdict["score"], answer, verdict), 1
-        while best[0] < PASS_SCORE and attempts <= max_revisions:
-            answer = self.llm.text(system, (
-                f"{task}\n\n---\nYour previous answer:\n{best[1]}\n\nReviewer feedback:\n"
-                + "\n".join(f"- {i}" for i in best[2]["issues"]) + f"\nSuggestion: {best[2]['suggestion']}\n\n"
-                "Write an improved, complete answer to the original task. Output only the answer."))
+        draft, best, attempts, error = answer, None, 1, None
+        try:
             verdict = self.critique(task, answer, knowledge, expected)
-            attempts += 1
-            if verdict["score"] > best[0]:
-                best = (verdict["score"], answer, verdict)
+            best = (verdict["score"], answer, verdict)
+            while best[0] < PASS_SCORE and attempts <= max_revisions:
+                answer = self.llm.text(system, (
+                    f"{task}\n\n---\nYour previous answer:\n{best[1]}\n\nReviewer feedback:\n"
+                    + "\n".join(f"- {i}" for i in best[2]["issues"]) + f"\nSuggestion: {best[2]['suggestion']}\n\n"
+                    "Write an improved, complete answer to the original task. Output only the answer."))
+                attempts += 1
+                verdict = self.critique(task, answer, knowledge, expected)
+                if verdict["score"] > best[0]:
+                    best = (verdict["score"], answer, verdict)
+        except LLMError as e:
+            error = str(e)[:300]  # learning is best-effort: keep the best answer we already have
+        if best is None:
+            eid = self.store.add_episode(self.a["id"], task, draft, None, None, attempts, ids)
+            return {"answer": draft, "score": None, "episode_id": eid, "attempts": attempts, "critique": None,
+                    "lessons_used": used, "new_lessons": [], "learning_error": error}
         score, answer, verdict = best
 
         new = self.reflect(task, draft, answer, verdict, attempts)
-        ids = [l["id"] for l in lessons]
         self.store.credit_lessons(ids, score)
         eid = self.store.add_episode(self.a["id"], task, answer, score, verdict, attempts, ids)
-        return {"answer": answer, "score": round(score, 3), "episode_id": eid, "attempts": attempts,
-                "critique": verdict, "lessons_used": [l["text"] for l in lessons], "new_lessons": new}
+        out = {"answer": answer, "score": round(score, 3), "episode_id": eid, "attempts": attempts,
+               "critique": verdict, "lessons_used": used, "new_lessons": new}
+        return {**out, "learning_error": error} if error else out
 
     # --- 2. across tasks -----------------------------------------------------
     def reflect(self, task, draft, final, verdict, attempts):
@@ -185,8 +195,8 @@ class Agent:
             raise ValueError("No eval examples. Add examples, give feedback with corrections, or run study first.")
         current = self.store.active_playbook(self.a["id"])
         lessons = self.store.top_lessons(self.a["id"], 25)
-        failures = [e for e in self.store.episodes(self.a["id"], 40) if (e["score"] or 0) < PASS_SCORE or
-                    (e["rating"] or 5) <= 2][:10]
+        failures = [e for e in self.store.episodes(self.a["id"], 40)
+                    if (e["score"] is not None and e["score"] < PASS_SCORE) or (e["rating"] or 5) <= 2][:10]
         evidence = "\n".join(
             f"- Task: {e['task'][:200]} | issues: {(e['critique'] or {}).get('issues')} | user: {e['correction'] or ''}"
             for e in failures)

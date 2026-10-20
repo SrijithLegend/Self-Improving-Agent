@@ -92,8 +92,27 @@ def test_run_revises_learns_and_records(store, agent):
 def test_no_learning_mode_is_one_call(store, agent):
     llm = FakeLLM()
     out = Agent(store, llm, agent).run("hi", learn=False)
-    assert llm.calls == 1 and out["episode_id"] is None
-    assert out["critique"] is None and out["lessons_used"] == []
+    assert llm.calls == 1 and out["critique"] is None and out["lessons_used"] == []
+    assert store.episode(agent["id"], out["episode_id"])["score"] is None  # recorded, unscored
+    Agent(store, llm, agent).feedback(out["episode_id"], 2, correction="better")  # fast answers can be corrected
+    assert store.stats(agent["id"])["episodes"] == 0  # unscored episodes stay out of the learning curve
+
+
+def test_failed_learning_keeps_the_answer(store, agent):
+    class FlakyGrader(FakeLLM):
+        def json(self, system, prompt, temperature=0.2):
+            raise LLMError("grader overloaded")
+
+    out = Agent(store, FlakyGrader(), agent).run("deadline?")
+    assert out["answer"] == "draft answer" and out["score"] is None and "overloaded" in out["learning_error"]
+    assert store.episode(agent["id"], out["episode_id"])
+
+
+def test_learning_curve_windows_do_not_overlap(store, agent):
+    for score in (0.2, 0.4, 0.8):
+        store.add_episode(agent["id"], "t", "a", score, {}, 1, [])
+    st = store.stats(agent["id"])
+    assert st["avg_score_first_20"] == 0.2 and st["avg_score_last_20"] == 0.8
 
 
 def test_system_prompt_order():
