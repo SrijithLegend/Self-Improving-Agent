@@ -5,10 +5,13 @@ An agent improves the way a person does, at three timescales:
   2. Across tasks    - distil each episode into short reusable lessons; lessons that keep
                        coinciding with good outcomes rise, ones that coincide with failures are retired.
   3. Consolidation   - periodically rewrite the agent's playbook (its strategy prompt) from the
-                       lessons and failures, and adopt it ONLY if it scores higher on a held eval set (improve).
-Learning signals: self-critique, human feedback/corrections, and self-study on supplied documents.
+                       lessons and failures, and compare it with the current one on the eval set (improve).
+                       It is activated only when asked to and only if the comparison says "improved".
+Learning signals: self-critique, verified human corrections, and self-study on supplied documents.
 """
-from statistics import mean, stdev
+from statistics import mean
+
+from sia_devtools.scoring import compare_scores
 
 from .llm import LLMError
 from .store import Store
@@ -16,6 +19,7 @@ from .store import Store
 PASS_SCORE = 0.75          # critique score (0..1) that counts as "good enough"
 ADOPT_MARGIN = 0.02        # a new playbook must beat the current one by this much on the eval set...
                            # ...and by more than the noise (one standard error of the per-example gains)
+MIN_EXAMPLES = 3           # fewer eval examples than this can never show an improvement ("inconclusive")
 
 DEFAULT_RUBRIC = ("Correctness and factual accuracy; completeness for what was asked; "
                   "grounded in the reference knowledge when relevant (no invented facts); "
@@ -132,23 +136,31 @@ class Agent:
         return saved
 
     def feedback(self, episode_id, rating, correction=None, comment=None):
-        """Human feedback is the strongest signal: re-credit lessons, learn from corrections, grow the eval set."""
+        """Ratings re-credit the lessons used. A correction is stored as a *pending* eval example: user text can be
+        wrong or malicious, so it reaches the eval set and the lessons only after verify_example()."""
         ep = self.store.episode(self.a["id"], episode_id)
         if not ep:
             raise KeyError("episode not found")
         self.store.set_feedback(episode_id, rating, correction or comment)
         self.store.credit_lessons(ep["lesson_ids"], (rating - 1) / 4)
-        new = []
-        if correction:
-            self.store.add_example(self.a["id"], ep["task"], correction, "feedback")
-        if correction or comment or rating <= 2:
-            new = self._save_lessons(
-                f"TASK:\n{ep['task']}\n\nAGENT ANSWER:\n{ep['answer'][:3000]}\n\nUSER RATING: {rating}/5\n"
-                + (f"USER'S CORRECT ANSWER:\n{correction[:3000]}\n" if correction else "")
-                + (f"USER COMMENT: {comment}\n" if comment else "")
-                + '\nWhat should the agent do differently next time? Return {"lessons": [..]} with at most 2 '
-                  "general, imperative lessons under 30 words each.", "feedback")
-        return {"episode_id": episode_id, "new_lessons": new}
+        pending = self.store.add_example(self.a["id"], ep["task"], correction, "feedback", "pending",
+                                         episode_id) if correction else None
+        return {"episode_id": episode_id, "pending_example_id": pending, "new_lessons": []}
+
+    def verify_example(self, example_id):
+        """A reviewer accepts a pending correction: it joins the eval set and the agent learns from it."""
+        ex = self.store.example(self.a["id"], example_id)
+        if not ex:
+            raise KeyError("example not found")
+        if not self.store.review_example(self.a["id"], example_id, "verified"):
+            raise ValueError(f"Example is already {ex['status']}.")
+        ep = self.store.episode(self.a["id"], ex["episode_id"]) if ex["episode_id"] else None
+        new = self._save_lessons(
+            f"TASK:\n{ex['input']}\n\n" + (f"AGENT ANSWER:\n{ep['answer'][:3000]}\n\n" if ep else "")
+            + f"VERIFIED CORRECT ANSWER:\n{ex['expected'][:3000]}\n\nWhat should the agent do differently next "
+              'time? Return {"lessons": [..]} with at most 2 general, imperative lessons under 30 words each.',
+            "feedback")
+        return {"example_id": example_id, "status": "verified", "new_lessons": new}
 
     def study(self, rounds=3):
         """Self-study: quiz itself on its own documents, grade against the source, learn from mistakes.
@@ -189,7 +201,9 @@ class Agent:
     def evaluate(self, playbook, examples, trials=1):
         return mean(self.scores(playbook, examples, trials))
 
-    def improve(self, max_examples=8, trials=1):
+    def improve(self, max_examples=8, trials=1, activate=False):
+        """Draft a new playbook and compare it with the current one on the same eval examples. The candidate is
+        always stored; it becomes active only if `activate` is set and the verdict is "improved"."""
         examples = self.store.examples(self.a["id"], max_examples)
         if not examples:
             raise ValueError("No eval examples. Add examples, give feedback with corrections, or run study first.")
@@ -197,9 +211,9 @@ class Agent:
         lessons = self.store.top_lessons(self.a["id"], 25)
         failures = [e for e in self.store.episodes(self.a["id"], 40)
                     if (e["score"] is not None and e["score"] < PASS_SCORE) or (e["rating"] or 5) <= 2][:10]
-        evidence = "\n".join(
-            f"- Task: {e['task'][:200]} | issues: {(e['critique'] or {}).get('issues')} | user: {e['correction'] or ''}"
-            for e in failures)
+        # user corrections are left out on purpose: verified ones are already in the eval set and the lessons
+        evidence = "\n".join(f"- Task: {e['task'][:200]} | issues: {(e['critique'] or {}).get('issues')}"
+                              for e in failures)
         candidate = self.llm.text(
             f"You are improving the operating playbook of an AI expert in {self.a['domain']}.",
             f"CURRENT PLAYBOOK:\n{current['content'] or '(none yet)'}\n\n"
@@ -212,19 +226,23 @@ class Agent:
         old = self.scores(current["content"], examples, trials)
         new = self.scores(candidate, examples, trials)
         old_score, new_score = mean(old), mean(new)
-        adopted = significant_gain(old, new)
+        decision = compare_scores(old, new, policy=POLICY)
+        adopted = activate and decision["verdict"] == "improved"
         version = self.store.add_playbook(self.a["id"], candidate, round(new_score, 3), adopted,
-                                          note=f"baseline {old_score:.3f} on {len(examples)} examples")
+                                          note=f"{decision['verdict']}: {decision['reason']} "
+                                               f"(baseline {old_score:.3f} on {len(examples)} examples)")
         if not adopted and current["version"]:
             # keep the active version's recorded score current against today's eval set
             self.store.x("UPDATE playbooks SET score=? WHERE agent_id=? AND active=1", round(old_score, 3), self.a["id"])
-        return {"adopted": adopted, "old_score": round(old_score, 3), "new_score": round(new_score, 3),
-                "candidate_version": version, "active_version": version if adopted else current["version"],
-                "eval_examples": len(examples), "trials": trials, "playbook": candidate}
+        return {"adopted": adopted, "verdict": decision["verdict"], "reason": decision["reason"],
+                "old_score": round(old_score, 3), "new_score": round(new_score, 3), "candidate_version": version,
+                "active_version": version if adopted else current["version"], "eval_examples": len(examples),
+                "trials": trials, "playbook": candidate}
+
+
+POLICY = {"min_examples": MIN_EXAMPLES, "min_gain": ADOPT_MARGIN, "z": 1.0}
 
 
 def significant_gain(old, new):
     """Paired comparison on the same examples: the mean gain must clear ADOPT_MARGIN and one standard error."""
-    gains = [n - o for o, n in zip(old, new)]
-    noise = stdev(gains) / len(gains) ** 0.5 if len(gains) > 1 else 0.0
-    return mean(gains) > max(ADOPT_MARGIN, noise)
+    return compare_scores(old, new, policy={**POLICY, "min_examples": 1})["verdict"] == "improved"

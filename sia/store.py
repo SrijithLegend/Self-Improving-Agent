@@ -1,4 +1,5 @@
-"""SQLite persistence: tenants, agents, knowledge (FTS5), lessons (FTS5), playbook versions, episodes, eval examples."""
+"""SQLite persistence: organizations (tenants) and their API keys, agents, knowledge (FTS5), lessons (FTS5),
+playbook versions, episodes, eval examples, usage. Schema changes are applied as numbered migrations."""
 import hashlib
 import json
 import re
@@ -7,6 +8,8 @@ import sqlite3
 import time
 import uuid
 from contextlib import closing, contextmanager
+
+from sia_devtools.store import migrate
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tenants (id TEXT PRIMARY KEY, name TEXT, key_hash TEXT UNIQUE, created REAL);
@@ -30,8 +33,32 @@ CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_lessons_agent ON lessons(agent_id, active);
 CREATE INDEX IF NOT EXISTS idx_episodes_agent ON episodes(agent_id, created);
 CREATE INDEX IF NOT EXISTS idx_examples_agent ON examples(agent_id);
-CREATE INDEX IF NOT EXISTS idx_playbooks_agent ON playbooks(agent_id, active);
+CREATE INDEX IF NOT EXISTS idx_playbooks_agent ON playbooks(agent_id, active)
 """
+
+MIGRATIONS = [("legacy-000-base", SCHEMA), ("legacy-001-keys-plans-review", """
+CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, org_id TEXT NOT NULL, name TEXT, prefix TEXT,
+    key_hash TEXT UNIQUE NOT NULL, scope TEXT NOT NULL DEFAULT 'full', created REAL, last_used REAL, revoked REAL);
+CREATE INDEX IF NOT EXISTS idx_api_keys_org ON api_keys(org_id);
+INSERT OR IGNORE INTO api_keys (id, org_id, name, prefix, key_hash, scope, created)
+    SELECT lower(hex(randomblob(8))), id, 'default', '', key_hash, 'full', created FROM tenants WHERE key_hash IS NOT NULL;
+ALTER TABLE tenants ADD COLUMN plan TEXT NOT NULL DEFAULT 'free';
+ALTER TABLE examples ADD COLUMN status TEXT NOT NULL DEFAULT 'verified';
+ALTER TABLE examples ADD COLUMN episode_id TEXT;
+ALTER TABLE usage ADD COLUMN units INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE usage ADD COLUMN project_id TEXT
+""")]
+
+# Starting hypotheses for a freemium plan, not validated prices. Enforced server-side in sia/api.py.
+PLANS = {
+    "free": {"projects": 1, "runs_per_month": 10_000, "examples_per_dataset": 200, "retention_days": 14,
+             "overage": False},
+    "pro": {"projects": 10, "runs_per_month": 250_000, "examples_per_dataset": 5_000, "retention_days": 90,
+            "overage": True},
+    "team": {"projects": 100, "runs_per_month": 2_000_000, "examples_per_dataset": 50_000, "retention_days": 365,
+             "overage": True},
+}
+KEY_SCOPES = ("full", "ingest")  # ingest: send runs and feedback, read the active prompt; nothing else
 
 PRIOR, PRIOR_WEIGHT = 0.7, 2  # new lessons start with a mildly optimistic utility
 PRUNE_AFTER_USES, PRUNE_BELOW = 5, 0.45
@@ -71,9 +98,7 @@ def hash_key(key):
 class Store:
     def __init__(self, path="sia.db"):
         self.path = path
-        with self._conn() as c:
-            c.execute("PRAGMA journal_mode=WAL")
-            c.executescript(SCHEMA)
+        migrate(path, MIGRATIONS)
 
     @contextmanager
     def _conn(self):
@@ -96,22 +121,56 @@ class Store:
         with self._conn() as c:
             return c.execute(sql, args).rowcount
 
-    # --- tenants -------------------------------------------------------------
-    def create_tenant(self, name):
-        key = "sia_" + secrets.token_urlsafe(32)
+    # --- tenants (organizations) and API keys --------------------------------
+    def create_tenant(self, name, plan="free"):
         tid = uuid.uuid4().hex
-        self.x("INSERT INTO tenants VALUES (?,?,?,?)", tid, name, hash_key(key), time.time())
-        return {"tenant_id": tid, "name": name, "api_key": key}
+        self.x("INSERT INTO tenants (id, name, created, plan) VALUES (?,?,?,?)", tid, name, time.time(), plan)
+        return {"tenant_id": tid, "name": name, "api_key": self.create_key(tid, "default")["api_key"]}
 
-    def rotate_key(self, tenant_id):
-        """Issue a new API key; the old one stops working immediately. Agents and data are kept."""
-        key = "sia_" + secrets.token_urlsafe(32)
-        self.x("UPDATE tenants SET key_hash=? WHERE id=?", hash_key(key), tenant_id)
-        return {"tenant_id": tenant_id, "api_key": key}
+    def tenant(self, tenant_id):
+        rows = self.q("SELECT id, name, plan, created FROM tenants WHERE id=?", tenant_id)
+        return rows[0] if rows else None
+
+    def set_plan(self, tenant_id, plan):
+        if plan not in PLANS:
+            raise ValueError(f"plan must be one of {', '.join(PLANS)}")
+        return bool(self.n("UPDATE tenants SET plan=? WHERE id=?", plan, tenant_id))
+
+    def create_key(self, tenant_id, name="key", scope="full"):
+        """Keys are stored only as SHA-256 hashes; the plaintext is returned once, here."""
+        if scope not in KEY_SCOPES:
+            raise ValueError(f"scope must be one of {KEY_SCOPES}")
+        key, kid = "sia_" + secrets.token_urlsafe(32), uuid.uuid4().hex[:16]
+        self.x("INSERT INTO api_keys (id, org_id, name, prefix, key_hash, scope, created) VALUES (?,?,?,?,?,?,?)",
+               kid, tenant_id, name, key[:8], hash_key(key), scope, time.time())
+        return {"id": kid, "name": name, "scope": scope, "prefix": key[:8], "api_key": key}
+
+    def keys(self, tenant_id):
+        return self.q("SELECT id, name, prefix, scope, created, last_used, revoked FROM api_keys WHERE org_id=? "
+                      "ORDER BY created", tenant_id)
+
+    def revoke_key(self, tenant_id, key_id):
+        return bool(self.n("UPDATE api_keys SET revoked=? WHERE id=? AND org_id=? AND revoked IS NULL",
+                           time.time(), key_id, tenant_id))
+
+    def rotate_key(self, tenant_id, key_id=None):
+        """Issue a replacement key (same name and scope); the old one stops working immediately. Data is kept."""
+        old = self.q("SELECT * FROM api_keys WHERE org_id=? AND revoked IS NULL" + (" AND id=?" if key_id else ""),
+                     tenant_id, *([key_id] if key_id else []))
+        for k in old:
+            self.revoke_key(tenant_id, k["id"])
+        new = self.create_key(tenant_id, old[0]["name"] if old else "default", old[0]["scope"] if old else "full")
+        return {"tenant_id": tenant_id, **new}
 
     def tenant_by_key(self, key):
-        rows = self.q("SELECT id, name FROM tenants WHERE key_hash=?", hash_key(key))
-        return rows[0] if rows else None
+        rows = self.q("""SELECT t.id, t.name, t.plan, k.id key_id, k.scope FROM api_keys k JOIN tenants t ON t.id=k.org_id
+                         WHERE k.key_hash=? AND k.revoked IS NULL""", hash_key(key))
+        if not rows:
+            return None
+        now = time.time()  # last_used is informational; write it at most once a minute per key
+        self.x("UPDATE api_keys SET last_used=? WHERE id=? AND (last_used IS NULL OR last_used<?)",
+               now, rows[0]["key_id"], now - 60)
+        return rows[0]
 
     # --- agents --------------------------------------------------------------
     def create_agent(self, tenant_id, name, domain, instructions="", rubric=""):
@@ -278,30 +337,46 @@ class Store:
         self.x("UPDATE episodes SET rating=?, correction=? WHERE id=?", rating, correction, episode_id)
 
     # --- eval examples -------------------------------------------------------
-    def add_example(self, agent_id, input, expected, source):
-        return self.x("INSERT INTO examples (agent_id, input, expected, source, created) VALUES (?,?,?,?,?)",
-                      agent_id, input, expected, source, time.time())
+    def add_example(self, agent_id, input, expected, source, status="verified", episode_id=None):
+        return self.x("INSERT INTO examples (agent_id, input, expected, source, created, status, episode_id) "
+                      "VALUES (?,?,?,?,?,?,?)", agent_id, input, expected, source, time.time(), status, episode_id)
 
-    def examples(self, agent_id, limit=None):
-        """Eval set, real data first: user-provided, then feedback corrections, then synthetic study questions."""
-        sql = """SELECT * FROM examples WHERE agent_id=? ORDER BY
-                 CASE source WHEN 'user' THEN 0 WHEN 'feedback' THEN 1 ELSE 2 END, random()"""
+    def examples(self, agent_id, limit=None, include_unverified=False):
+        """Eval set, real data first: user-provided, then verified feedback corrections, then synthetic study
+        questions. User corrections stay 'pending' (out of the eval set) until someone verifies them."""
+        sql = f"""SELECT * FROM examples WHERE agent_id=? {'' if include_unverified else "AND status='verified'"}
+                 ORDER BY CASE source WHEN 'user' THEN 0 WHEN 'feedback' THEN 1 ELSE 2 END, random()"""
         return self.q(sql + (" LIMIT ?" if limit else ""), agent_id, *([limit] if limit else []))
+
+    def example(self, agent_id, example_id):
+        rows = self.q("SELECT * FROM examples WHERE id=? AND agent_id=?", example_id, agent_id)
+        return rows[0] if rows else None
+
+    def review_example(self, agent_id, example_id, status):
+        """pending -> verified | rejected. Returns False if the example is missing or was already reviewed."""
+        return bool(self.n("UPDATE examples SET status=? WHERE id=? AND agent_id=? AND status='pending'",
+                           status, example_id, agent_id))
 
     def delete_example(self, agent_id, example_id):
         return bool(self.n("DELETE FROM examples WHERE id=? AND agent_id=?", example_id, agent_id))
 
     # --- usage (metering) ----------------------------------------------------
-    def record_usage(self, tenant_id, agent_id, action, llm_calls):
-        self.x("INSERT INTO usage (tenant_id, agent_id, action, llm_calls, created) VALUES (?,?,?,?,?)",
-               tenant_id, agent_id, action, llm_calls, time.time())
+    def record_usage(self, tenant_id, agent_id, action, llm_calls, units=1, project_id=None):
+        self.x("INSERT INTO usage (tenant_id, agent_id, action, llm_calls, created, units, project_id) "
+               "VALUES (?,?,?,?,?,?,?)", tenant_id, agent_id, action, llm_calls, time.time(), units, project_id)
 
     def usage(self, tenant_id, since=0):
-        """Requests and LLM calls per action since a timestamp; kept after agents are deleted, for billing."""
-        rows = self.q("""SELECT action, COUNT(*) requests, SUM(llm_calls) llm_calls FROM usage
+        """Requests, LLM calls and units (e.g. runs ingested) per action since a timestamp; kept after agents and
+        projects are deleted, for billing."""
+        rows = self.q("""SELECT action, COUNT(*) requests, SUM(llm_calls) llm_calls, SUM(units) units FROM usage
                          WHERE tenant_id=? AND created>=? GROUP BY action ORDER BY action""", tenant_id, since)
         return {"requests": sum(r["requests"] for r in rows), "llm_calls": sum(r["llm_calls"] for r in rows),
-                "by_action": {r["action"]: {"requests": r["requests"], "llm_calls": r["llm_calls"]} for r in rows}}
+                "by_action": {r["action"]: {"requests": r["requests"], "llm_calls": r["llm_calls"],
+                                            "units": r["units"]} for r in rows}}
+
+    def units_since(self, tenant_id, action, since):
+        return self.q("SELECT COALESCE(SUM(units), 0) n FROM usage WHERE tenant_id=? AND action=? AND created>=?",
+                      tenant_id, action, since)[0]["n"]
 
     # --- stats ---------------------------------------------------------------
     def stats(self, agent_id):
@@ -319,7 +394,10 @@ class Store:
             "avg_score_last_20": avg(scores[len(scores) - half:] if half else []),
             "active_lessons": self.q("SELECT COUNT(*) n FROM lessons WHERE agent_id=? AND active=1", agent_id)[0]["n"],
             "documents": count("docs"),
-            "eval_examples": count("examples"),
+            "eval_examples": self.q("SELECT COUNT(*) n FROM examples WHERE agent_id=? AND status='verified'",
+                                    agent_id)[0]["n"],
+            "pending_examples": self.q("SELECT COUNT(*) n FROM examples WHERE agent_id=? AND status='pending'",
+                                       agent_id)[0]["n"],
             "playbook_version": pb["version"],
             "playbook_score": pb["score"],
             "episodes_since_last_improve": since,

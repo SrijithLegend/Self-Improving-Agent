@@ -1,164 +1,703 @@
-# Build Spec: Self-Improving Agent API (SIA)
+# PROJECT: Turn Self-Improving Agent into a Commercial AI Developer Platform
 
-> Hand this file to Claude Code. Its job is to build the whole system in this file without stopping to ask
-> questions. Make reasonable default choices and write them down in the README.
+Repository: https://github.com/SrijithLegend/Self-Improving-Agent
 
-## 1. Goal
+Working product name: **SIA DevTools**
 
-Build a **multi-purpose, self-improving AI agent** that customers use through an **API**. A customer:
+Product category: AI agent evaluation, feedback-driven improvement, and regression prevention infrastructure.
 
-1. brings **their own LLM API key** (a free model by default),
-2. creates an agent for **any field** (tax, law, medicine notes, support, sales, coding, …),
-3. gives it **context**: instructions, documents, examples and a definition of a good answer,
-4. uses it. The agent then **gets better on its own** the way a person does: it practises, gets critiqued,
-   writes down what it learned, takes corrections, studies its material and keeps rethinking its approach.
+## YOUR ROLE
 
-It must be **commercially viable**: multi-tenant, secure, metered, deployable, and the improvement must be
-**measurable**, not just claimed.
+Act as a senior AI infrastructure engineer, Python SDK architect, full-stack SaaS engineer, application security engineer, and startup CTO.
 
-## 2. Hard constraints
+Your task is to transform my existing Self-Improving Agent repository into a functional, developer-friendly platform that AI engineers can integrate into their applications.
 
-- **Free model by default.** Use Google Gemini's free tier through raw REST (`generativelanguage.googleapis.com/v1beta`).
-  Do not hardcode a model that may be retired. Use the alias `gemini-flash-latest` with `gemini-flash-lite-latest`
-  as a fallback, and check the list with `GET /v1beta/models` before relying on any name.
-- **Bring your own key (BYO-key).** Every request that uses the LLM carries the customer's provider key in a header.
-  **Never store or log provider keys.**
-- **Any provider.** Support Gemini, Anthropic, and any OpenAI-compatible endpoint (OpenAI, Groq, OpenRouter, Together,
-  Mistral, DeepSeek, Ollama). Use raw HTTP via `httpx` instead of per-provider SDKs.
-- **No fine-tuning.** The improvement has to work with any model behind an API, so it lives in retrieved knowledge,
-  learned lessons and a versioned, gated "playbook" (the agent's system prompt). Every change must be inspectable
-  and reversible.
-- **Python 3.12, minimal dependencies:** `fastapi`, `uvicorn`, `httpx`, `pydantic`, `python-dotenv`, `pytest`.
-  Use SQLite with **FTS5** for storage and retrieval (no vector DB, no embeddings service).
-- **Work in the existing repo** (`phase1/` holds earlier experiments; leave it alone apart from bug fixes).
-  Put the product in a `sia/` package.
-- **Commit after every step** with a descriptive message. Never commit `.env`, `.venv`, `*.db` or `__pycache__`.
-- **Don't stop until it's finished.** Don't wait for user input.
+Do not merely create a landing page, a mock dashboard, or a new project that ignores my existing implementation.
 
-## 3. How the agent improves (the core idea)
+Inspect the actual repository first. Understand the current implementation, preserve useful code, identify technical gaps, and build the smallest commercially useful product before adding unnecessary features.
 
-The agent learns on three timescales, plus two outside signals:
+Make reasonable engineering decisions independently. Do not stop after the audit; proceed through the implementation phases and run tests after each significant change.
 
-| Timescale / signal | Mechanism | Where the signal comes from |
-|---|---|---|
-| **Within a task** | Write a draft, critique it against the agent's rubric (a score from 0 to 10 with specific issues), revise, and repeat up to N times. Keep the best-scoring attempt. | LLM reviewer |
-| **Across tasks** | After each task, **reflect**: boil the episode down to ≤2 short, general, imperative **lessons**. Store them, and skip near-duplicates (token Jaccard > 0.6). Before each task, retrieve the relevant lessons plus the most proven ones. | Critique |
-| **Lesson utility** | Each lesson tracks `uses` and `total` outcome score. Utility = `(total + 0.7·2) / (uses + 2)`, a Bayesian prior that is mildly optimistic for new lessons. Lessons with ≥5 uses and utility < 0.45 are **retired automatically**. Lessons are ranked by utility. | Episode scores and user ratings |
-| **Human feedback** | A rating from 1 to 5 re-credits the lessons used in that episode with `(rating-1)/4`. A correction turns into **new lessons** and also a new **eval example**. A low rating or a comment triggers lesson extraction. | Users |
-| **Self-study** | Pick random chunks of the agent's own documents, have the LLM write a realistic question and the ideal answer from the source, answer it with learning on, and grade against the source. Each question is saved as a *synthetic* eval example. | Customer documents |
-| **Consolidation** | `improve()` asks the LLM to write a new **playbook** (≤350 words of principles, procedures and checks) from the current playbook, the top lessons and recent failures. Score **both** the current and the candidate playbook on the eval set (same examples, temperature 0.3, graded against the expected answers). **Adopt the candidate only if it beats the current one by more than 0.02.** Keep every version; rollback must be possible. | Eval set |
+# 1. PRODUCT VISION
 
-Eval set priority: examples the user provided, then feedback corrections, then synthetic study questions.
+SIA DevTools helps developers improve the reliability of their AI applications through a repeatable engineering workflow:
 
-The system prompt is built in this order: domain role → customer instructions → active playbook →
-relevant lessons → retrieved knowledge chunks (FTS5 bm25, top 5) → "say so when information is missing,
-don't invent it".
+1. Capture AI-agent executions.
+2. Inspect failures and collect human feedback.
+3. Build reusable evaluation datasets from verified examples.
+4. Identify recurring failure patterns.
+5. Generate candidate prompt, instruction, or playbook improvements.
+6. Compare the current and candidate versions on the same evaluation dataset.
+7. Detect regressions and uncertain improvements.
+8. Promote improvements only through an explicit, auditable release process.
+9. Track whether the changes improve real application quality over time.
 
-Learning is **best-effort**. A failed reflection must never fail the customer's task.
+The core promise is:
 
-## 4. Components
+**Turn AI-agent failures into tested improvements, with evidence that changes help before they reach production.**
 
+Do not claim that the underlying language model retrains itself. The product improves application behavior through evaluation, feedback, lessons, retrieval, and controlled instruction or prompt versioning.
+
+# 2. FIRST: AUDIT THE EXISTING REPOSITORY
+
+Inspect the complete project before changing it.
+
+Pay particular attention to:
+
+- `sia/agent.py`
+- `sia/store.py`
+- `sia/api.py`
+- `sia/llm.py`
+- `sia/__main__.py`
+- `examples/`
+- `tests/`
+- `phase1/`
+- `README.md`
+- `SPEC.md`
+- Dependency and configuration files
+
+Confirm which files actually exist before relying on these paths.
+
+Understand and test the current implementations of:
+
+- `run()`
+- `critique()`
+- `_save_lessons()`
+- `feedback()`
+- `study()`
+- `scores()`
+- `evaluate()`
+- `improve()`
+- `significant_gain()`
+
+Inspect how the current SQLite schema stores episodes, lessons, evaluation examples, document chunks, feedback, and playbook versions.
+
+Run the existing test suite and record the baseline.
+
+Identify:
+- Broken or incomplete functionality.
+- Missing API capabilities.
+- Persistence limitations.
+- Weak evaluation methodology.
+- Security risks.
+- Missing SDK functionality.
+- Missing developer documentation.
+- Potential compatibility issues.
+
+Produce a concise audit, then implement the product in phases.
+
+Do not rewrite functioning modules just to make the architecture look cleaner. Refactor only when there is a concrete technical benefit.
+
+# 3. DEFINE THE FIRST PRODUCT WEDGE
+
+The first release must not attempt to compete with every AI observability platform on every feature.
+
+Focus on this workflow:
+
+**Capture a failure → create a verified test case → propose an improvement → evaluate it → prevent regressions.**
+
+The initial target customer is a small AI startup or independent developer using Python to build an LLM-powered application or agent.
+
+The developer should be able to integrate SIA into an existing application without rewriting the agent or adopting a specific agent framework.
+
+Prioritize framework-agnostic instrumentation and evaluation. Add framework-specific adapters only where justified.
+
+# 4. BUILD A PYTHON SDK
+
+Create a distributable Python package with a clear public API.
+
+Use a suitable package name such as `sia-devtools` if available and appropriate. Verify naming and packaging constraints before publishing.
+
+Provide an intuitive interface along these lines:
+
+```python
+from sia_devtools import SIAClient
+
+sia = SIAClient(
+    api_key="YOUR_API_KEY",
+    project="my-ai-agent",
+)
+
+run = sia.start_run(
+    name="answer_customer_question",
+    input={"question": "What is the refund policy?"},
+)
+
+try:
+    answer = my_existing_agent("What is the refund policy?")
+
+    run.log_output({
+        "answer": answer,
+    })
+
+    run.end(status="success")
+
+except Exception as exc:
+    run.log_error(str(exc))
+    run.end(status="error")
+    raise
 ```
-sia/llm.py      LLM client: providers, retries, fallback chain, JSON parsing
-sia/store.py    SQLite + FTS5 persistence
-sia/agent.py    Agent: run, critique, reflect, feedback, study, evaluate, improve
-sia/api.py      FastAPI service
-sia/__main__.py CLI: `python -m sia serve [--port N]`, `python -m sia create-tenant <name>`
-tests/          offline tests with a scripted fake LLM
-examples/demo.py  live demo on the free Gemini tier showing the score rise
-README.md, Dockerfile, requirements.txt, pytest.ini (testpaths = tests)
+
+This is an illustrative API design. Implement a consistent, working API rather than copying the example blindly.
+
+The SDK must support:
+
+- Run creation and completion.
+- Inputs and outputs.
+- Error capture.
+- Latency measurement.
+- Token and cost metadata when available.
+- Tags and metadata.
+- User feedback.
+- Custom scores.
+- Dataset evaluation.
+- Explicit flush or synchronization where required.
+- Timeouts and bounded retries.
+- Offline or local mode if practical.
+- Clear exceptions and useful type hints.
+
+Requirements:
+
+- Support Python 3.11 or a clearly documented compatible range.
+- Use typed public interfaces.
+- Provide predictable error handling.
+- Avoid blocking the user's agent unnecessarily.
+- Do not swallow application exceptions silently.
+- Never expose API keys in logs or error messages.
+- Avoid making network requests automatically during module import.
+- Keep optional integrations optional.
+
+Include a decorator or context-manager interface if it makes instrumentation easier.
+
+Provide a synchronous SDK first. Add asynchronous support only if it can be implemented and tested correctly.
+
+# 5. IMPLEMENT TRACE AND RUN STORAGE
+
+Each run should capture useful execution metadata.
+
+Use a structured schema with fields such as:
+
+- Project ID.
+- Run ID.
+- Parent run ID where applicable.
+- Run name.
+- Input and output.
+- Start and end timestamps.
+- Duration.
+- Status.
+- Error details.
+- Model and provider metadata.
+- Token usage and cost when supplied.
+- Tags.
+- Custom metadata.
+- Feedback and evaluation references.
+
+Design the schema so that future agent frameworks can represent nested runs and tool calls.
+
+Do not claim to capture every internal model or tool call automatically unless an integration actually instruments those calls.
+
+Support:
+- Single-run inspection.
+- Run history.
+- Filtering by status, project, tag, and time.
+- Search where practical.
+- Failure inspection.
+- Trace export.
+
+Use bounded payload sizes and configurable data-redaction rules.
+
+Provide a local development mode backed by SQLite if that simplifies the first release. Use a managed database only when needed for a multi-user hosted deployment.
+
+# 6. BUILD AN EVALUATION ENGINE
+
+This is one of the product's core components.
+
+Developers must be able to define datasets containing inputs, expected outputs, optional context, and custom metadata.
+
+Provide a dataset API along these lines:
+
+```python
+dataset = sia.create_dataset("refund-policy-tests")
+
+dataset.add_example(
+    input={"question": "Can I get a refund?"},
+    expected_output={
+        "answer": "Refunds are available under the stated policy."
+    },
+)
 ```
 
-### 4.1 `llm.py`
-- `LLM(provider, api_key, model=None, base_url=None)` with methods `.text(system, prompt, temperature, as_json)`
-  and `.json(system, prompt)`. Also keep a `.calls` counter, which is used for metering.
-- `model` may be a **comma-separated fallback chain**. On 429/5xx/timeouts, retry with exponential backoff
-  (respect `Retry-After`, cap 60s). Once retries run out, move to the next model. Use more retries with a single model and
-  fewer with a chain. Auth/4xx errors fail immediately with no fallback.
-- Gemini: `systemInstruction`, `generationConfig.responseMimeType=application/json` for JSON, key in the
-  `x-goog-api-key` **header** (never in the URL), and drop `thought` parts.
-- `parse_json` must tolerate code fences and chatter around the JSON object.
-- **SSRF guard:** a custom `base_url` and Ollama are allowed only when `SIA_ALLOW_CUSTOM_BASE_URL=1`.
-- Providers with no safe default model must have the model set explicitly.
+Support:
+- Versioned datasets or immutable evaluation snapshots.
+- Adding, editing, and deleting examples with clear history.
+- Replaying an application or supplied evaluator against a dataset.
+- Custom scoring functions.
+- Exact-match and structured-output checks where appropriate.
+- Rule-based assertions.
+- Optional model-based grading.
+- Per-example scores and aggregate metrics.
+- Exportable evaluation results.
+- Reproducible comparisons between runs.
 
-### 4.2 `store.py` (SQLite, WAL, one connection per call)
-Tables:
-- `tenants(id, name, key_hash, created)`: API keys are `sia_<random>` and only the **sha256 is stored**. Show the key once.
-- `agents(id, tenant_id, name, domain, instructions, rubric, created)`
-- `docs(id, agent_id, title, chunks, created)` + FTS5 `chunks(text, title, agent_id, doc_id)`. Chunk on paragraphs
-  into pieces of about 1000 characters, and hard-split oversized paragraphs.
-- `lessons(id, agent_id, text, source, uses, total, active, created)` + FTS5 `lessons_fts`
-- `playbooks(id, agent_id, version, content, score, active, note, created)`, with exactly one active version per agent
-  (version 0 means no playbook)
-- `episodes(id, agent_id, task, answer, score, critique JSON, attempts, lesson_ids JSON, rating, correction, created)`
-- `examples(id, agent_id, input, expected, source[user|feedback|synthetic], created)`
+Do not use an LLM judge as the sole source of truth when deterministic assertions or human-reviewed answers are available.
 
-Build FTS queries from quoted tokens joined with OR, so user text can't inject FTS syntax.
-Every query is **scoped by agent_id**, and every API lookup checks tenant ownership.
-`stats(agent_id)` returns: the episode count, the average score of the first 20 vs the last 20 episodes (the learning curve), active lessons,
-docs, eval examples, playbook version and score, episodes since the last improve, and `improve_recommended` (≥10).
+Store the model, prompt/playbook version, scorer version, dataset version, and evaluation configuration used for each result.
 
-### 4.3 `api.py`
-Auth: `Authorization: Bearer <sia key>`. LLM headers: `X-LLM-Provider` (default `gemini`), `X-LLM-Key`,
-`X-LLM-Model`, `X-LLM-Base-URL`. An optional `SIA_DEFAULT_LLM_KEY` env var is a server-side default for self-hosters.
+Separate deterministic tests from model-based evaluations.
 
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/health` | liveness |
-| POST | `/v1/tenants` | create a customer (requires `X-Admin-Key` == `SIA_ADMIN_KEY`, constant-time compare) |
-| POST/GET | `/v1/agents` | create / list agents |
-| GET/PATCH/DELETE | `/v1/agents/{id}` | details + stats + active playbook / update / delete everything |
-| POST/GET/DELETE | `/v1/agents/{id}/knowledge[/{doc_id}]` | documents |
-| POST/GET/DELETE | `/v1/agents/{id}/examples[/{ex_id}]` | eval set |
-| POST | `/v1/agents/{id}/run` | `{task, learn=true, max_revisions=2}` → answer, score, episode_id, attempts, critique, lessons_used, new_lessons, llm_calls |
-| POST | `/v1/agents/{id}/feedback` | `{episode_id, rating 1-5, correction?, comment?}` |
-| POST | `/v1/agents/{id}/study` | `{rounds 1-20}` |
-| POST | `/v1/agents/{id}/improve` | `{max_examples 1-30}` → adopted, old_score, new_score, active_version, playbook |
-| GET | `/v1/agents/{id}/lessons` | ranked by utility; `POST …/lessons/{lid}/enable|disable` lets a human veto |
-| GET | `/v1/agents/{id}/episodes` | history |
-| GET | `/v1/agents/{id}/playbooks` | versions; `POST …/playbooks/{v}/activate` rolls back (0 = none); an unknown version → 404 and the current version stays active |
+# 7. TURN HUMAN CORRECTIONS INTO VERIFIED EVALUATION EXAMPLES
 
-Error mapping: provider errors → 502, bad input/config → 400, missing → 404, auth → 401/403.
-Every response from an LLM-using endpoint includes `llm_calls` (this is the metering hook).
-Validate input sizes with pydantic (task ≤20k chars, document ≤2M chars).
+Implement a workflow that lets developers annotate runs.
 
-## 5. Tests (offline, deterministic)
+Support:
+- Positive and negative feedback.
+- A corrected answer.
+- A failure category.
+- An optional explanation.
+- An optional reviewer identifier.
+- Timestamp and source run.
+- A review or verification status.
 
-Write a `FakeLLM` that answers "GOOD" only when coached (it sees reviewer feedback, or a playbook that says
-"Always be GOOD"). It grades GOOD as 9/10 and anything else as 4/10, and returns fixed lessons and quiz questions. Cover:
-- chunking, FTS sanitising, `parse_json`
-- knowledge search is isolated per agent
-- lesson dedupe, crediting and automatic retirement
-- `run` revises (draft scores 0.4 → revised scores 0.9), saves a lesson, and the next task retrieves and credits that lesson
-- `learn=false` makes exactly one LLM call
-- a feedback correction becomes an eval example; an unknown episode raises an error
-- study creates examples; `improve` adopts a better playbook, **refuses an equal one**, and rollback works
-- LLM guards: missing key, the SSRF base URL check, a missing model, an unknown provider
-- model fallback on 503, tested with `httpx.MockTransport`
-- API end to end with `TestClient`: admin gate, 401, **tenant isolation (404 for another tenant's agent)**,
-  run → feedback → improve → stats → delete
+Allow an authorized developer to turn a corrected run into a dataset example.
 
-## 6. Live verification (required before calling it done)
+Do not automatically treat every user correction as correct. Corrections can be inaccurate, malicious, ambiguous, or contradictory.
 
-1. Run `python -m pytest`: everything must pass.
-2. Start `python -m sia serve` and test it over real HTTP: health, create a tenant, create an agent, `/docs`, and a 404 for an unknown agent.
-3. Run `examples/demo.py` on the free Gemini key from `.env` (`GENAI_API_KEY`). **Pick a task set hard enough that
-   the baseline eval score is clearly below 1.0** (for example a refund policy with multi-step arithmetic, exceptions
-   and a required escalation email). The demo should show the baseline score → per-task scores and new lessons →
-   study → improve (old → new, adopted?) → final lessons and stats. If the free model returns 503, rely on the
-   fallback chain instead of failing.
-4. Report the real numbers. Do not claim an improvement that the run didn't show.
+Implement review states such as:
+- Pending.
+- Verified.
+- Rejected.
 
-## 7. Security checklist
-- Provider keys are never persisted or logged; tenant keys are hashed; the admin key uses a constant-time compare.
-- Every route checks that the agent belongs to the tenant.
-- Custom base URLs and Ollama are off by default (SSRF).
-- Provider keys go in headers, not URLs.
+Only verified examples should enter the trusted evaluation dataset by default.
 
-## 8. Deliverables
-- Working code as described above, tests passing, the demo run, a README (concept, quickstart, API, curl examples
-  with a `sia()` shell helper, cost per call, deployment, security, known limits) and a Dockerfile
-  (`/data` volume, `HOST=0.0.0.0`).
-- Known limits to write down rather than build yet: billing and rate limits per tenant, background jobs for
-  study/improve (they currently run synchronously), Postgres for running several instances, and self-grading bias
-  (which user examples and corrections counteract).
+Preserve provenance so developers can trace each example back to its original execution and correction.
+
+# 8. IMPLEMENT THE IMPROVEMENT ENGINE
+
+Reuse the existing agent improvement logic where appropriate.
+
+The engine should:
+
+1. Inspect evaluation failures and verified feedback.
+2. Identify recurring patterns.
+3. Extract candidate reusable lessons.
+4. Generate a candidate prompt or instruction playbook.
+5. Evaluate the candidate and current version on the same frozen evaluation set.
+6. Compare per-example and aggregate results.
+7. Check for regressions in important cases.
+8. Record the decision and supporting evidence.
+9. Retain the current active version if improvement is insufficient.
+10. Allow explicit approval before production promotion.
+
+Support improvement targets such as:
+- A system prompt.
+- An instruction playbook.
+- A retrieval or answer policy.
+- An output-format instruction.
+
+Keep arbitrary application code modification out of the initial release.
+
+Do not automatically rewrite a developer's source code or deploy a new agent implementation.
+
+The improvement engine must not be allowed to alter its own safety rules or evaluation policy simply to obtain a better score.
+
+# 9. MAKE EVALUATION DECISIONS RELIABLE
+
+Preserve and improve the existing `significant_gain()` logic if it is valid after inspection.
+
+Use the same examples and comparable evaluation settings for current and candidate versions.
+
+Implement:
+- Per-example score differences.
+- Mean improvement.
+- Variance or uncertainty estimates where appropriate.
+- Configurable adoption thresholds.
+- Minimum sample requirements.
+- Regression detection.
+- Evaluation history.
+- A clear reason for every adoption or rejection decision.
+
+Where scores come from nondeterministic model-based graders, account for evaluation noise.
+
+If there are too few examples to establish a meaningful improvement, return an inconclusive result rather than declaring success.
+
+For critical evaluation sets, allow regression rules that must pass regardless of the aggregate score.
+
+Keep separate:
+- Candidate generation.
+- Candidate evaluation.
+- Candidate approval.
+- Production activation.
+
+No candidate should silently replace a production version.
+
+# 10. ADD A CI REGRESSION GATE
+
+Provide a CLI that developers can use locally and in CI.
+
+Example target interface:
+
+```bash
+sia eval run --dataset refund-policy-tests
+sia eval compare --baseline current --candidate candidate
+sia eval gate --min-score 0.85 --max-regressions 0
+```
+
+These are example commands; implement and document a consistent CLI.
+
+The gate should:
+- Exit successfully when configured criteria pass.
+- Exit with a nonzero code when mandatory checks fail.
+- Report inconclusive results separately from passing results.
+- Produce readable terminal output.
+- Optionally write JSON results for CI systems.
+- Avoid requiring a hosted account for local evaluation if local mode is supported.
+
+Add a documented GitHub Actions example that evaluates a candidate prompt or playbook before a release.
+
+Do not claim the gate protects arbitrary application behavior unless the developer has supplied relevant evaluation cases and integrated the appropriate application execution.
+
+# 11. PROVIDE A FRAMEWORK-AGNOSTIC API
+
+Developers should be able to instrument their own Python function without adopting a specific orchestration framework.
+
+Start with:
+- Direct function instrumentation.
+- Manual run logging.
+- Dataset-based evaluation.
+- Custom scorer registration.
+
+Keep integration points open for future adapters to:
+- LangChain and LangGraph.
+- LlamaIndex.
+- Plain Google GenAI applications.
+- Plain OpenAI-compatible applications.
+- Other agent frameworks.
+
+Do not implement every integration in the first release.
+
+Build one complete example using a simple Python agent and one example using a supported LLM provider.
+
+Use mock providers for automated tests so the standard test suite does not require API keys.
+
+# 12. BUILD A DEVELOPER DASHBOARD
+
+Create a clean, responsive web interface that uses real backend data.
+
+Reuse an existing frontend if one exists. Otherwise choose a suitable React and TypeScript stack.
+
+Required screens:
+
+## Overview
+- Total runs.
+- Error rate.
+- Evaluation scores.
+- Latency.
+- Token usage and estimated cost where available.
+- Recent failures.
+- Latest improvement decision.
+
+## Projects
+- Create and inspect projects.
+- Manage project settings.
+- Display API key metadata.
+- Revoke or rotate keys.
+- Show SDK installation instructions.
+
+## Runs and traces
+- Browse runs.
+- Filter and search.
+- Inspect inputs, outputs, errors, and metadata.
+- View nested execution steps where available.
+- Display redacted payloads safely.
+
+## Datasets
+- Create datasets.
+- Add and edit examples.
+- Review corrected examples.
+- Display dataset versions and evaluation history.
+
+## Evaluations
+- Start an evaluation.
+- Inspect per-example results.
+- Compare baseline and candidate versions.
+- Display score changes and regression warnings.
+- Export results.
+
+## Improvement laboratory
+- View extracted lessons.
+- Inspect candidate playbooks.
+- Compare versions.
+- Review acceptance criteria.
+- Approve or reject a candidate.
+- Roll back to a previous approved version.
+
+## Settings and usage
+- Project and organization settings.
+- Usage accounting.
+- Data-retention settings.
+- API key management.
+- Rate limits and plan entitlements.
+
+All statistics must come from actual data. Do not populate the dashboard with fake results or fabricated performance improvements.
+
+# 13. HOSTED API AND MULTI-TENANT ARCHITECTURE
+
+Build a hosted API that can support multiple independent developers and organizations.
+
+Use FastAPI if it fits the existing repository.
+
+Implement:
+- Authentication.
+- Organization and project ownership.
+- API key authentication for SDK requests.
+- Secure key storage, using hashes for keys that only need verification.
+- Key rotation and revocation.
+- Authorization on every protected operation.
+- Database migrations.
+- Request validation.
+- Pagination.
+- Rate limits.
+- Upload and payload limits where relevant.
+- Health checks.
+- Structured logs.
+- Timeouts and bounded retries.
+
+Every run, dataset, feedback item, lesson, evaluation, and playbook version must be scoped to the authorized organization and project.
+
+Never trust a project ID supplied by the client without checking authorization.
+
+Write explicit tests proving that one organization cannot access another organization's records.
+
+Keep secrets on the server. Never embed private API keys in frontend code.
+
+Do not send customer payloads to external LLM providers unless the relevant feature requires it and the data flow is disclosed.
+
+Add configurable redaction for sensitive data before storing or transmitting traces.
+
+Do not store secrets, passwords, or sensitive personal information in evaluation datasets by default.
+
+# 14. DESIGN THE SYSTEM FOR FAILURE
+
+Model calls, network connections, and background jobs will fail.
+
+Handle:
+- Provider timeouts.
+- Invalid model responses.
+- Rate-limit responses.
+- Partial trace submission.
+- Duplicate requests.
+- Interrupted evaluation jobs.
+- Failed candidate generation.
+- Concurrent improvement attempts.
+- Database errors.
+
+Use idempotency where appropriate.
+
+Keep long-running evaluations outside request transactions. Add job status tracking if evaluation duration warrants it.
+
+Never mark a run, evaluation, or improvement job successful before its actual completion.
+
+Do not silently discard failed trace submissions. Expose useful diagnostics without breaking the developer's application.
+
+# 15. TESTING REQUIREMENTS
+
+Expand the existing tests to cover the following.
+
+SDK:
+- Run lifecycle.
+- Error capture.
+- Metadata serialization.
+- Timeout behavior.
+- API authentication failures.
+- Local mode.
+- Custom scoring.
+
+Datasets and evaluations:
+- Dataset persistence.
+- Version consistency.
+- Per-example results.
+- Aggregate metrics.
+- Deterministic scoring.
+- Malformed examples.
+- Reproducible comparisons.
+
+Improvement engine:
+- A genuinely better candidate.
+- A worse candidate.
+- An inconclusive candidate.
+- A candidate with a critical regression.
+- Insufficient evaluation examples.
+- Malicious feedback.
+- Duplicate feedback.
+- Failed model calls.
+- Approval and rollback.
+
+Security:
+- Cross-tenant access attempts.
+- Revoked API keys.
+- Invalid project identifiers.
+- Oversized inputs.
+- Sensitive-data redaction.
+- Unauthorized playbook activation.
+
+CI:
+- Passing gate.
+- Failing gate.
+- Inconclusive gate.
+- Machine-readable result output.
+
+Use deterministic mocks for normal automated tests. Keep live LLM tests optional.
+
+Run the full suite after implementation. Report actual test results and do not fabricate passing tests.
+
+# 16. PRICING AND MONETIZATION READINESS
+
+Prepare the product for a freemium developer business.
+
+Treat the following as initial hypotheses, not validated prices.
+
+Free:
+- One project.
+- Local evaluation support.
+- Limited hosted runs.
+- Small evaluation datasets.
+- Basic score comparison.
+
+Pro:
+- Multiple projects.
+- Higher hosted usage.
+- Team collaboration.
+- Extended history.
+- Advanced evaluation comparisons.
+- CI integrations and improvement workflows.
+
+Team:
+- Multiple developers.
+- Organization-level access control.
+- Shared datasets.
+- Audit history.
+- Configurable retention.
+- Higher usage limits.
+
+Do not build complex enterprise billing before validating demand.
+
+Implement a simple plan and entitlement system with server-side limits.
+
+Track usage accurately and distinguish included usage from overages.
+
+Prepare a clean payment integration boundary for a supported provider. Do not pretend payments have succeeded or store payment card information.
+
+# 17. COMPETITIVE DIFFERENTIATION
+
+Do not attempt to replicate every feature of existing AI observability platforms.
+
+Position the product around:
+- Feedback that becomes verified regression tests.
+- Reusable lessons extracted from failures.
+- Candidate prompt or playbook improvement.
+- Paired evaluation of current versus candidate versions.
+- Regression prevention in CI.
+- Transparent adoption decisions and rollback.
+
+The product must prove this workflow works end to end.
+
+Avoid marketing claims such as:
+- “Perfect AI.”
+- “Zero hallucinations.”
+- “Fully autonomous self-improvement.”
+- “Guaranteed accuracy gains.”
+
+Use measured claims backed by actual evaluations.
+
+# 18. DOCUMENTATION AND DEMO
+
+Provide:
+- A complete README.
+- Installation instructions.
+- SDK quickstart.
+- Local development instructions.
+- API documentation.
+- Dataset and evaluator examples.
+- Improvement workflow example.
+- CI integration example.
+- Configuration reference.
+- `.env.example` containing placeholders only.
+- Database setup and migration instructions.
+- Deployment instructions.
+- Security and data-handling documentation.
+- Known limitations.
+
+Create a realistic demonstration project with fictional data.
+
+The demo must show:
+1. A baseline agent makes a predictable mistake.
+2. The mistake is captured.
+3. A verified correction becomes an evaluation example.
+4. A candidate instruction change is proposed.
+5. Baseline and candidate versions are evaluated on a fixed dataset.
+6. The outcome is accepted, rejected, or marked inconclusive according to actual measured results.
+7. The decision and scores are displayed.
+
+If the candidate does not improve the score, show the rejection honestly. Do not force the demonstration to produce a successful improvement.
+
+# 19. IMPLEMENTATION PHASES
+
+Phase 1: Audit the repository and run the baseline tests.
+
+Phase 2: Stabilize the existing agent engine, data model, and evaluation logic.
+
+Phase 3: Build the SDK and local run-recording interface.
+
+Phase 4: Implement datasets, scoring, evaluation comparisons, and feedback verification.
+
+Phase 5: Implement the improvement laboratory and CI regression gate.
+
+Phase 6: Build the hosted API, authentication, organizations, and project isolation.
+
+Phase 7: Build the dashboard using real backend data.
+
+Phase 8: Add usage limits, deployment support, documentation, and a complete demo.
+
+Phase 9: Run integration, security, and regression tests. Fix failures and document remaining limitations.
+
+After each phase, summarize:
+- Files created or modified.
+- Features completed.
+- Commands actually executed.
+- Test results.
+- Known limitations.
+- Next implementation step.
+
+Do not stop after writing a plan. Continue through the phases unless a genuine blocker requires my input.
+
+# 20. DEFINITION OF DONE
+
+The initial product is complete when:
+
+1. A developer can install the SDK.
+2. The developer can instrument an existing Python function.
+3. Runs and errors can be recorded and inspected.
+4. Developers can create evaluation datasets.
+5. Evaluation results are reproducible and traceable to their configuration.
+6. Verified feedback can become evaluation examples.
+7. The existing improvement engine can generate a candidate instruction or playbook.
+8. The system compares baseline and candidate versions on the same evaluation set.
+9. A candidate with inadequate evidence or critical regressions is not automatically promoted.
+10. An approved change can be activated and rolled back.
+11. The CLI can enforce an evaluation gate in CI.
+12. The hosted application enforces project and organization isolation.
+13. The dashboard displays real stored data.
+14. Automated tests cover the critical workflows.
+15. A new developer can follow the README to run the example locally.
+
+Do not claim production readiness until security, deployment, reliability, and operational limitations have been explicitly assessed.
+
+## FINAL INSTRUCTION
+
+Begin by auditing the existing repository and running the current tests.
+
+Then build the smallest complete developer workflow that demonstrates the product's central value: capturing a real failure, converting a verified correction into an evaluation case, testing a candidate improvement, and preventing regressions.
+
+Prioritize a reliable SDK, a useful evaluation engine, and a working CI gate before building a large dashboard.
+
+Make every important improvement measurable, explainable, reversible, and backed by test results.

@@ -1,38 +1,92 @@
-"""HTTP API. Tenants authenticate with their SIA key; every LLM call uses the caller's own provider key.
+"""HTTP API: SIA DevTools (projects, runs, feedback, datasets, evaluations, versions) and the managed agents API.
 
-Auth:  Authorization: Bearer <sia api key>
-LLM:   X-LLM-Provider (gemini|anthropic|openai|groq|openrouter|...), X-LLM-Key, optional X-LLM-Model, X-LLM-Base-URL
-Keys sent in X-LLM-Key are used for the request only and never stored.
+Auth:  Authorization: Bearer <sia api key>. "full" keys can do everything in their organization; "ingest" keys
+       (for production apps) can only send runs and feedback and read the active prompt.
+LLM:   only the managed agents routes call a model, with the caller's own key: X-LLM-Provider, X-LLM-Key,
+       optional X-LLM-Model, X-LLM-Base-URL. Keys sent in X-LLM-Key are used for the request only and never stored.
+       DevTools routes never send your data to a model provider.
+Local: SIA_LOCAL_MODE=1 (used by `sia dashboard`) skips keys and serves the local org, to loopback clients only.
 """
+import csv
+import io
+import json
+import logging
 import os
 import secrets
 import threading
 import time
 from collections import defaultdict, deque
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from pydantic import BaseModel, Field
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field
+
+from sia_devtools.errors import QuotaExceeded, SIAError
+from sia_devtools.store import LOCAL_ORG, DevStore
 
 from .agent import Agent
 from .llm import LLM, LLMError
-from .store import Store
+from .store import PLANS, Store
 
-app = FastAPI(title="Self-Improving Agent API", version="1.0.0",
-              description="Create domain agents that improve from experience, feedback and documents. "
-                          "Bring your own LLM key.")
-store = Store(os.getenv("SIA_DB", "sia.db"))
+app = FastAPI(title="SIA DevTools API", version="0.1.0",
+              description="Turn AI-agent failures into tested improvements: capture runs, verify feedback into "
+                          "datasets, evaluate prompt versions and release them through an explicit approval step.")
+DB = os.getenv("SIA_DB", "sia.db")
+store, dev = Store(DB), DevStore(DB)
+LOCAL_MODE = os.getenv("SIA_LOCAL_MODE") == "1"
+MAX_BODY = int(os.getenv("SIA_MAX_BODY_BYTES", str(4 * 1024 * 1024)))
 # ponytail: in-memory per-process limiter; move to Redis/Postgres when running several instances.
-RATE_LIMIT = int(os.getenv("SIA_RATE_LIMIT", "120"))  # requests per tenant per minute; 0 = unlimited
+RATE_LIMIT = int(os.getenv("SIA_RATE_LIMIT", "120"))  # requests per org per minute; 0 = unlimited
 _hits, _hits_lock = defaultdict(deque), threading.Lock()
+log = logging.getLogger("sia.access")
+DASHBOARD = Path(__file__).with_name("dashboard.html")
+
+
+@app.exception_handler(SIAError)
+def sia_error(request: Request, e: SIAError):
+    return JSONResponse({"detail": str(e)}, e.status)
+
+
+@app.middleware("http")
+async def guard_and_log(request: Request, call_next):
+    """Reject oversized bodies, add security headers, and log one JSON line per request (no headers, no query
+    strings, no bodies: those can hold keys or personal data)."""
+    t0 = time.perf_counter()
+    if int(request.headers.get("content-length") or 0) > MAX_BODY:
+        response = JSONResponse({"detail": f"Request body over {MAX_BODY} bytes."}, 413)
+    else:
+        response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    log.info(json.dumps({"ts": round(time.time(), 3), "method": request.method, "path": request.url.path,
+                         "status": response.status_code, "ms": round((time.perf_counter() - t0) * 1000, 1),
+                         "org": getattr(request.state, "org", None)}))
+    return response
 
 
 # --- dependencies ------------------------------------------------------------
-def tenant(authorization: str = Header(default="")):
-    key = authorization.removeprefix("Bearer ").strip()
-    t = store.tenant_by_key(key) if key else None
-    if not t:
-        raise HTTPException(401, "Invalid or missing API key (Authorization: Bearer <key>).")
-    if RATE_LIMIT:
+LOOPBACK = {"127.0.0.1", "::1", "localhost", "testclient"}
+
+
+def key_auth(request: Request, authorization: str = Header(default="")):
+    """Any valid key (full or ingest scope)."""
+    if LOCAL_MODE:
+        # no keys here, so refuse anything not from and addressed to this machine (the Host check stops DNS
+        # rebinding: a web page on evil.example pointing its DNS at 127.0.0.1 still sends Host: evil.example)
+        host = (request.headers.get("host") or "").rsplit(":", 1)[0].strip("[]")
+        if (request.client.host if request.client else "") not in LOOPBACK or host not in LOOPBACK | {"testserver"}:
+            raise HTTPException(403, "Local mode only serves this machine.")
+        t = {"id": LOCAL_ORG, "name": "local", "plan": "local", "key_id": "local", "scope": "full"}
+    else:
+        key = authorization.removeprefix("Bearer ").strip()
+        t = store.tenant_by_key(key) if key else None
+        if not t:
+            raise HTTPException(401, "Invalid, revoked or missing API key (Authorization: Bearer <key>).")
+    request.state.org = t["id"]
+    if RATE_LIMIT and not LOCAL_MODE:
         now = time.monotonic()
         with _hits_lock:
             q = _hits[t["id"]]
@@ -42,6 +96,31 @@ def tenant(authorization: str = Header(default="")):
                 raise HTTPException(429, "Rate limit exceeded.", headers={"Retry-After": str(int(61 - (now - q[0])))})
             q.append(now)
     return t
+
+
+def tenant(t=Depends(key_auth)):
+    """A full-scope key: required for everything except ingesting runs/feedback and reading the active prompt."""
+    if t["scope"] != "full":
+        raise HTTPException(403, "This key has 'ingest' scope; this action needs a full-scope key.")
+    return t
+
+
+def actor(t, name=None):
+    return name or f"key:{t['key_id']}"
+
+
+def limits(t):
+    return PLANS.get(t["plan"])  # None in local mode: no limits
+
+
+def month_start():
+    return datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+
+def require_admin(x_admin_key):
+    admin = os.getenv("SIA_ADMIN_KEY", "")
+    if not admin or not secrets.compare_digest(x_admin_key.encode(), admin.encode()):
+        raise HTTPException(403, "Admin key required.")
 
 
 def llm(x_llm_provider: str = Header(default="gemini"), x_llm_key: str = Header(default=""),
@@ -81,7 +160,7 @@ def call(fn, *args, **kwargs):
         raise HTTPException(400, str(e))
 
 
-# --- request bodies ----------------------------------------------------------
+# --- request bodies: managed agents -------------------------------------------
 class TenantIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
 
@@ -119,7 +198,8 @@ class RunIn(BaseModel):
 class FeedbackIn(BaseModel):
     episode_id: str
     rating: int = Field(ge=1, le=5)
-    correction: str | None = Field(None, max_length=20000, description="The answer it should have given.")
+    correction: str | None = Field(None, max_length=20000, description="The answer it should have given. Stored "
+                                                                       "as a pending example until verified.")
     comment: str | None = Field(None, max_length=5000)
 
 
@@ -135,33 +215,452 @@ class EvaluateIn(BaseModel):
 class ImproveIn(BaseModel):
     max_examples: int = Field(8, ge=1, le=30)
     trials: int = Field(1, ge=1, le=3, description="Answers per example and playbook, averaged; more = less noise.")
+    activate: bool = Field(False, description="Activate the candidate if the verdict is 'improved'. Otherwise it is "
+                                              "only stored; activate it later with /playbooks/{version}/activate.")
 
 
-# --- routes ------------------------------------------------------------------
+# --- request bodies: DevTools --------------------------------------------------
+class Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class KeyIn(Strict):
+    name: str = Field("key", min_length=1, max_length=100)
+    scope: Literal["full", "ingest"] = "full"
+
+
+class PlanIn(Strict):
+    plan: Literal["free", "pro", "team"]
+
+
+class ProjectIn(Strict):
+    name: str = Field(min_length=1, max_length=64)
+    settings: dict | None = None
+
+
+class ProjectPatch(Strict):
+    settings: dict = Field(description="Any of: redact (rule names or regexes), retention_days, policy, locked_text.")
+
+
+class TraceIn(Strict):
+    id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=200)
+    parent_id: str | None = None
+    input: Any = None
+    output: Any = None
+    status: Literal["running", "success", "error"] = "success"
+    error: str | None = None
+    started: float | None = None
+    ended: float | None = None
+    duration_ms: float | None = None
+    model: str | None = None
+    provider: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    cost: float | None = None
+    tags: list[str] = []
+    metadata: dict = {}
+    scores: dict[str, float] = {}
+    version_name: str | None = None
+    version: int | None = None
+
+
+class RunsIn(Strict):
+    runs: list[TraceIn] = Field(min_length=1, max_length=500)
+
+
+class FeedbackIn2(Strict):
+    id: str | None = Field(None, max_length=64, description="Client-chosen id; resending it is a no-op.")
+    rating: Literal[-1, 1]
+    correction: Any = None
+    category: str | None = Field(None, max_length=100)
+    explanation: str | None = Field(None, max_length=5000)
+    reviewer: str | None = Field(None, max_length=200)
+
+
+class ReviewIn(Strict):
+    status: Literal["verified", "rejected"]
+    dataset_id: str | None = None
+    expected_output: Any = None
+    note: str | None = Field(None, max_length=2000)
+    reviewer: str | None = Field(None, max_length=200)
+    critical: bool = False
+
+
+class DatasetIn(Strict):
+    name: str = Field(min_length=1, max_length=64)
+
+
+class DatasetExampleIn(Strict):
+    input: Any
+    expected_output: Any = None
+    metadata: dict = {}
+    critical: bool = False
+
+
+class DatasetExamplesIn(Strict):
+    examples: list[DatasetExampleIn] = Field(min_length=1, max_length=1000)
+
+
+class ExamplePatch(Strict):
+    input: Any = None
+    expected_output: Any = None
+    metadata: dict | None = None
+    critical: bool | None = None
+
+
+class ResultIn(Strict):
+    example_id: int
+    output: Any = None
+    scores: dict[str, float] = {}
+    error: str | None = None
+    duration_ms: float | None = None
+
+
+class EvaluationIn(Strict):
+    id: str | None = Field(None, max_length=64)
+    name: str | None = Field(None, max_length=200)
+    dataset_id: str
+    dataset_version: int
+    version_name: str | None = None
+    version: int | None = None
+    prompt_sha: str | None = Field(None, max_length=64)
+    config: dict
+    results: list[ResultIn] = Field(max_length=50_000)
+
+
+class CompareIn(Strict):
+    baseline_eval_id: str
+    candidate_eval_id: str
+    policy: dict | None = None
+
+
+class VersionIn(Strict):
+    name: str = Field("system_prompt", min_length=1, max_length=64)
+    content: str = Field(min_length=1, max_length=50_000)
+    parent_version: int | None = None
+    lessons: list | None = None
+    patterns: list | None = None
+    note: str | None = Field(None, max_length=2000)
+
+
+class ApproveIn(Strict):
+    comparison_id: str | None = None
+    override_reason: str | None = Field(None, max_length=2000)
+    reviewer: str | None = Field(None, max_length=200)
+
+
+class RejectIn(Strict):
+    reason: str | None = Field(None, max_length=2000)
+    reviewer: str | None = Field(None, max_length=200)
+
+
+class ActivateIn(Strict):
+    reviewer: str | None = Field(None, max_length=200)
+
+
+# --- service routes ------------------------------------------------------------
+@app.get("/", include_in_schema=False)
+@app.get("/dashboard", include_in_schema=False)
+def dashboard():
+    return HTMLResponse(DASHBOARD.read_text(encoding="utf-8"), headers={
+        "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                                   "style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'",
+        "Cache-Control": "no-store"})
+
+
 @app.get("/health")
 def health():
-    return {"ok": True}
+    try:
+        store.q("SELECT 1")
+    except Exception:
+        return JSONResponse({"ok": False, "db": False}, 503)
+    return {"ok": True, "db": True, "local_mode": LOCAL_MODE}
 
 
 @app.post("/v1/tenants", status_code=201)
 def create_tenant(body: TenantIn, x_admin_key: str = Header(default="")):
-    admin = os.getenv("SIA_ADMIN_KEY", "")
-    if not admin or not secrets.compare_digest(x_admin_key.encode(), admin.encode()):
-        raise HTTPException(403, "Admin key required.")
+    require_admin(x_admin_key)
     return store.create_tenant(body.name)  # the api_key is shown only once
+
+
+@app.post("/v1/admin/orgs/{org_id}/plan")
+def set_plan(org_id: str, body: PlanIn, x_admin_key: str = Header(default="")):
+    """Payment integration boundary: call this from your billing provider's webhook once a payment is confirmed.
+    SIA never handles card data and never assumes a payment succeeded."""
+    require_admin(x_admin_key)
+    if not store.set_plan(org_id, body.plan):
+        raise HTTPException(404, "Organization not found.")
+    return {"org_id": org_id, "plan": body.plan, "limits": PLANS[body.plan]}
+
+
+@app.get("/v1/me")
+def me(t=Depends(key_auth)):
+    return {"org_id": t["id"], "name": t["name"], "plan": t["plan"], "limits": limits(t), "scope": t["scope"],
+            "key_id": t["key_id"], "local_mode": LOCAL_MODE}
+
+
+@app.get("/v1/keys")
+def list_keys(t=Depends(tenant)):
+    return [] if LOCAL_MODE else store.keys(t["id"])
+
+
+@app.post("/v1/keys", status_code=201)
+def create_key(body: KeyIn, t=Depends(tenant)):
+    if LOCAL_MODE:
+        raise HTTPException(400, "Local mode has no API keys.")
+    return store.create_key(t["id"], body.name, body.scope)  # the api_key is shown only once
 
 
 @app.post("/v1/keys/rotate")
 def rotate_key(t=Depends(tenant)):
-    return store.rotate_key(t["id"])  # the new api_key is shown only once; the old one stops working now
+    if LOCAL_MODE:
+        raise HTTPException(400, "Local mode has no API keys.")
+    return store.rotate_key(t["id"], t["key_id"])  # the new key is shown once; the old one stops working now
+
+
+@app.post("/v1/keys/{key_id}/revoke")
+def revoke_key(key_id: str, t=Depends(tenant)):
+    if not store.revoke_key(t["id"], key_id):
+        raise HTTPException(404, "Key not found or already revoked.")
+    return {"id": key_id, "revoked": True}
 
 
 @app.get("/v1/usage")
 def usage(days: int = 30, t=Depends(tenant)):
     days = min(max(days, 1), 366)
-    return {"days": days, **store.usage(t["id"], time.time() - days * 86400)}
+    lim = limits(t)
+    used = store.units_since(t["id"], "runs", month_start())
+    included = lim["runs_per_month"] if lim else None
+    return {"days": days, "plan": t["plan"], "limits": lim, **store.usage(t["id"], time.time() - days * 86400),
+            "runs_this_month": {"used": used, "included": included,
+                                "overage": max(0, used - included) if included is not None else 0}}
 
 
+# --- DevTools: projects ----------------------------------------------------------
+@app.post("/v1/projects")
+def create_project(body: ProjectIn, t=Depends(key_auth)):
+    """Get or create a project by name. Ingest keys can only look up existing projects."""
+    full = t["scope"] == "full"
+    lim = limits(t)
+    if full and lim and not any(p["name"] == body.name for p in dev.projects(t["id"])) \
+            and dev.count_projects(t["id"]) >= lim["projects"]:
+        raise QuotaExceeded(f"The {t['plan']} plan includes {lim['projects']} project(s).")
+    return dev.create_project(t["id"], body.name, body.settings, create=full, actor=actor(t))
+
+
+@app.get("/v1/projects")
+def list_projects(t=Depends(tenant)):
+    return dev.projects(t["id"])
+
+
+@app.get("/v1/projects/{project_id}")
+def get_project(project_id: str, t=Depends(tenant)):
+    return dev.project(t["id"], project_id)
+
+
+@app.patch("/v1/projects/{project_id}")
+def update_project(project_id: str, body: ProjectPatch, t=Depends(tenant)):
+    return dev.update_project(t["id"], project_id, body.settings, actor=actor(t))
+
+
+@app.get("/v1/projects/{project_id}/overview")
+def overview(project_id: str, t=Depends(tenant)):
+    return dev.overview(t["id"], project_id)
+
+
+@app.get("/v1/projects/{project_id}/audit")
+def audit(project_id: str, limit: int = 100, t=Depends(tenant)):
+    return dev.audit(t["id"], project_id, limit)
+
+
+# --- DevTools: runs and feedback --------------------------------------------------
+@app.post("/v1/projects/{project_id}/runs", status_code=202)
+def ingest_runs(project_id: str, body: RunsIn, t=Depends(key_auth)):
+    """Insert or update runs by id; resending a batch is safe."""
+    lim = limits(t)
+    if lim and not lim["overage"] and \
+            store.units_since(t["id"], "runs", month_start()) + len(body.runs) > lim["runs_per_month"]:
+        raise QuotaExceeded(f"Monthly run quota of the {t['plan']} plan ({lim['runs_per_month']}) reached.")
+    n = dev.log_runs(t["id"], project_id, [r.model_dump() for r in body.runs],
+                     retention_days=lim["retention_days"] if lim else None)
+    store.record_usage(t["id"], None, "runs", 0, units=n, project_id=project_id)
+    return {"accepted": n}
+
+
+def _run_filters(status, tag, name, q, since, until, root_only):
+    return dict(status=status, tag=tag, name=name, q=q, since=since, until=until, root_only=root_only)
+
+
+@app.get("/v1/projects/{project_id}/runs")
+def list_runs(project_id: str, status: str | None = None, tag: str | None = None, name: str | None = None,
+              q: str | None = None, since: float | None = None, until: float | None = None, root_only: bool = False,
+              limit: int = 50, offset: int = 0, t=Depends(tenant)):
+    return dev.runs(t["id"], project_id, limit, offset, **_run_filters(status, tag, name, q, since, until, root_only))
+
+
+@app.get("/v1/projects/{project_id}/runs/export")
+def export_runs(project_id: str, status: str | None = None, tag: str | None = None, name: str | None = None,
+                q: str | None = None, since: float | None = None, until: float | None = None,
+                root_only: bool = False, t=Depends(tenant)):
+    rows = dev.export_runs(t["id"], project_id, **_run_filters(status, tag, name, q, since, until, root_only))
+    return StreamingResponse((json.dumps(r) + "\n" for r in rows), media_type="application/x-ndjson",
+                             headers={"Content-Disposition": "attachment; filename=runs.jsonl"})
+
+
+@app.get("/v1/projects/{project_id}/runs/{run_id}")
+def get_run(project_id: str, run_id: str, t=Depends(tenant)):
+    return dev.run(t["id"], project_id, run_id)
+
+
+@app.post("/v1/projects/{project_id}/runs/{run_id}/feedback", status_code=201)
+def add_feedback(project_id: str, run_id: str, body: FeedbackIn2, t=Depends(key_auth)):
+    """Stored as pending. It never enters a dataset or an improvement until a full-scope key verifies it."""
+    return dev.add_feedback(t["id"], project_id, run_id, **body.model_dump())
+
+
+@app.get("/v1/projects/{project_id}/feedback")
+def list_feedback(project_id: str, status: str | None = None, run_id: str | None = None, limit: int = 50,
+                  offset: int = 0, t=Depends(tenant)):
+    return dev.feedback_list(t["id"], project_id, status, run_id, limit, offset)
+
+
+@app.post("/v1/projects/{project_id}/feedback/{feedback_id}/review")
+def review_feedback(project_id: str, feedback_id: str, body: ReviewIn, t=Depends(tenant)):
+    b = body.model_dump()
+    b["reviewer"] = actor(t, b["reviewer"])
+    if b["dataset_id"] and limits(t) and dev.count_examples(t["id"], project_id, b["dataset_id"]) >= \
+            limits(t)["examples_per_dataset"]:
+        raise QuotaExceeded(f"The {t['plan']} plan allows {limits(t)['examples_per_dataset']} examples per dataset.")
+    return dev.review_feedback(t["id"], project_id, feedback_id, **b)
+
+
+# --- DevTools: datasets -------------------------------------------------------------
+@app.post("/v1/projects/{project_id}/datasets")
+def create_dataset(project_id: str, body: DatasetIn, t=Depends(tenant)):
+    """Get or create a dataset by name."""
+    return dev.create_dataset(t["id"], project_id, body.name, actor=actor(t))
+
+
+@app.get("/v1/projects/{project_id}/datasets")
+def list_datasets(project_id: str, name: str | None = None, t=Depends(tenant)):
+    return dev.datasets(t["id"], project_id, name)
+
+
+@app.get("/v1/projects/{project_id}/datasets/{dataset_id}")
+def get_dataset(project_id: str, dataset_id: str, version: int | None = None, t=Depends(tenant)):
+    return dev.dataset(t["id"], project_id, dataset_id, version)
+
+
+@app.get("/v1/projects/{project_id}/datasets/{dataset_id}/history")
+def dataset_history(project_id: str, dataset_id: str, t=Depends(tenant)):
+    return dev.dataset_history(t["id"], project_id, dataset_id)
+
+
+@app.post("/v1/projects/{project_id}/datasets/{dataset_id}/examples", status_code=201)
+def add_dataset_examples(project_id: str, dataset_id: str, body: DatasetExamplesIn, t=Depends(tenant)):
+    lim = limits(t)
+    if lim and dev.count_examples(t["id"], project_id, dataset_id) + len(body.examples) > lim["examples_per_dataset"]:
+        raise QuotaExceeded(f"The {t['plan']} plan allows {lim['examples_per_dataset']} examples per dataset.")
+    return {"ids": dev.add_examples(t["id"], project_id, dataset_id, [e.model_dump() for e in body.examples])}
+
+
+@app.put("/v1/projects/{project_id}/datasets/{dataset_id}/examples/{example_id}")
+def update_dataset_example(project_id: str, dataset_id: str, example_id: int, body: ExamplePatch, t=Depends(tenant)):
+    fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    return {"id": dev.update_example(t["id"], project_id, dataset_id, example_id, fields)}
+
+
+@app.delete("/v1/projects/{project_id}/datasets/{dataset_id}/examples/{example_id}", status_code=204)
+def delete_dataset_example(project_id: str, dataset_id: str, example_id: int, t=Depends(tenant)):
+    dev.delete_example(t["id"], project_id, dataset_id, example_id)
+
+
+# --- DevTools: evaluations and comparisons -----------------------------------------
+@app.post("/v1/projects/{project_id}/evaluations", status_code=201)
+def record_evaluation(project_id: str, body: EvaluationIn, t=Depends(tenant)):
+    """Store a finished evaluation (the SDK runs your app and scorers; the server checks completeness and computes
+    the summary)."""
+    return dev.record_evaluation(t["id"], project_id, body.model_dump(), actor=actor(t))
+
+
+@app.get("/v1/projects/{project_id}/evaluations")
+def list_evaluations(project_id: str, dataset_id: str | None = None, limit: int = 50, offset: int = 0,
+                     t=Depends(tenant)):
+    return dev.evaluations(t["id"], project_id, dataset_id, limit, offset)
+
+
+@app.get("/v1/projects/{project_id}/evaluations/{evaluation_id}")
+def get_evaluation(project_id: str, evaluation_id: str, format: Literal["json", "csv"] = "json", t=Depends(tenant)):
+    ev = dev.evaluation(t["id"], project_id, evaluation_id)
+    if format == "json":
+        return ev
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["example_id", "critical", "score", "passed", "error", "scores", "input", "expected_output", "output"])
+    for r in ev["results"]:
+        w.writerow([r["example_id"], r["critical"], r["score"], r["passed"], r["error"] or "", json.dumps(r["scores"]),
+                    json.dumps(r["input"]), json.dumps(r["expected_output"]), json.dumps(r["output"])])
+    return Response(buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename=evaluation-{evaluation_id}.csv"})
+
+
+@app.post("/v1/projects/{project_id}/comparisons", status_code=201)
+def compare(project_id: str, body: CompareIn, t=Depends(tenant)):
+    return dev.compare(t["id"], project_id, body.baseline_eval_id, body.candidate_eval_id, body.policy,
+                       actor=actor(t))
+
+
+@app.get("/v1/projects/{project_id}/comparisons")
+def list_comparisons(project_id: str, limit: int = 50, t=Depends(tenant)):
+    return dev.comparisons(t["id"], project_id, limit)
+
+
+@app.get("/v1/projects/{project_id}/comparisons/{comparison_id}")
+def get_comparison(project_id: str, comparison_id: str, t=Depends(tenant)):
+    return dev.comparison(t["id"], project_id, comparison_id)
+
+
+# --- DevTools: versions -----------------------------------------------------------
+@app.post("/v1/projects/{project_id}/versions", status_code=201)
+def create_version(project_id: str, body: VersionIn, t=Depends(tenant)):
+    """New versions are always candidates. Approve and activate them explicitly."""
+    return dev.create_version(t["id"], project_id, actor=actor(t), **body.model_dump())
+
+
+@app.get("/v1/projects/{project_id}/versions")
+def list_versions(project_id: str, name: str | None = None, t=Depends(tenant)):
+    return dev.versions(t["id"], project_id, name)
+
+
+@app.get("/v1/projects/{project_id}/versions/active")
+def active_version(project_id: str, name: str = "system_prompt", t=Depends(key_auth)):
+    """The version production should use (null if none). Readable with ingest keys."""
+    return dev.active_version(t["id"], project_id, name)
+
+
+@app.get("/v1/projects/{project_id}/versions/{name}/{version}")
+def get_version(project_id: str, name: str, version: int, t=Depends(tenant)):
+    return dev.version(t["id"], project_id, name, version)
+
+
+@app.post("/v1/projects/{project_id}/versions/{name}/{version}/approve")
+def approve_version(project_id: str, name: str, version: int, body: ApproveIn, t=Depends(tenant)):
+    return dev.approve(t["id"], project_id, name, version, body.comparison_id, body.override_reason,
+                       actor(t, body.reviewer))
+
+
+@app.post("/v1/projects/{project_id}/versions/{name}/{version}/reject")
+def reject_version(project_id: str, name: str, version: int, body: RejectIn, t=Depends(tenant)):
+    return dev.reject(t["id"], project_id, name, version, body.reason, actor(t, body.reviewer))
+
+
+@app.post("/v1/projects/{project_id}/versions/{name}/{version}/activate")
+def activate_version(project_id: str, name: str, version: int, body: ActivateIn, t=Depends(tenant)):
+    return dev.activate(t["id"], project_id, name, version, actor(t, body.reviewer))
+
+
+# --- managed agents -----------------------------------------------------------------
 @app.post("/v1/agents", status_code=201)
 def create_agent(body: AgentIn, t=Depends(tenant)):
     return store.create_agent(t["id"], body.name, body.domain, body.instructions, body.rubric)
@@ -210,8 +709,21 @@ def add_example(body: ExampleIn, a=Depends(owned_agent)):
 
 
 @app.get("/v1/agents/{agent_id}/examples")
-def list_examples(a=Depends(owned_agent)):
-    return store.examples(a["id"])
+def list_examples(include_unverified: bool = False, a=Depends(owned_agent)):
+    return store.examples(a["id"], include_unverified=include_unverified)
+
+
+@app.post("/v1/agents/{agent_id}/examples/{example_id}/verify")
+def verify_example(example_id: int, request: Request, a=Depends(owned_agent), model=Depends(llm)):
+    """Accept a pending correction: it joins the eval set and the agent extracts lessons from it."""
+    return metered(request, a, model, Agent(store, model, a).verify_example, example_id)
+
+
+@app.post("/v1/agents/{agent_id}/examples/{example_id}/reject")
+def reject_example(example_id: int, a=Depends(owned_agent)):
+    if not store.review_example(a["id"], example_id, "rejected"):
+        raise HTTPException(404, "No pending example with that id.")
+    return {"id": example_id, "status": "rejected"}
 
 
 @app.delete("/v1/agents/{agent_id}/examples/{example_id}", status_code=204)
@@ -244,7 +756,7 @@ def evaluate(body: EvaluateIn, request: Request, a=Depends(owned_agent), model=D
     def score():
         examples = store.examples(a["id"], body.max_examples)
         if not examples:
-            raise ValueError("No eval examples. Add examples, give feedback with corrections, or run study first.")
+            raise ValueError("No eval examples. Add examples, verify feedback corrections, or run study first.")
         pb = store.active_playbook(a["id"])
         scores = Agent(store, model, a).scores(pb["content"], examples, body.trials)
         return {"score": round(sum(scores) / len(scores), 3), "playbook_version": pb["version"],
@@ -255,7 +767,7 @@ def evaluate(body: EvaluateIn, request: Request, a=Depends(owned_agent), model=D
 
 @app.post("/v1/agents/{agent_id}/improve")
 def improve(body: ImproveIn, request: Request, a=Depends(owned_agent), model=Depends(llm)):
-    return metered(request, a, model, Agent(store, model, a).improve, body.max_examples, body.trials)
+    return metered(request, a, model, Agent(store, model, a).improve, body.max_examples, body.trials, body.activate)
 
 
 @app.get("/v1/agents/{agent_id}/lessons")

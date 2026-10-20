@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIA DevTools</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e4e3df; --soft: #f0efeb;
+  --accent: #2f5bd3; --accent-ink: #ffffff; --good: #1f7a4d; --good-bg: #e3f3ea; --bad: #b3261e; --bad-bg: #fbe7e5;
+  --warn: #8a5a00; --warn-bg: #fdf1d8; --code: #f3f2ee; --shadow: 0 1px 2px rgba(0,0,0,.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141413; --panel: #1d1d1b; --ink: #ecebe6; --muted: #a09f99; --line: #33332f; --soft: #262623;
+    --accent: #7c9cff; --accent-ink: #10131c; --good: #6fd19f; --good-bg: #17301f; --bad: #ff8a80; --bad-bg: #3a1c1a;
+    --warn: #f1c46b; --warn-bg: #352a12; --code: #232321; --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141413; --panel: #1d1d1b; --ink: #ecebe6; --muted: #a09f99; --line: #33332f; --soft: #262623;
+  --accent: #7c9cff; --accent-ink: #10131c; --good: #6fd19f; --good-bg: #17301f; --bad: #ff8a80; --bad-bg: #3a1c1a;
+  --warn: #f1c46b; --warn-bg: #352a12; --code: #232321; --shadow: none;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre, .mono { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 12.5px; }
+pre { background: var(--code); padding: 10px 12px; border-radius: 8px; overflow: auto; max-height: 360px; margin: 6px 0;
+      white-space: pre-wrap; word-break: break-word; }
+.app { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+nav { background: var(--panel); border-right: 1px solid var(--line); padding: 16px 12px; position: sticky; top: 0; height: 100vh; }
+nav .brand { font-weight: 700; font-size: 15px; padding: 4px 8px 14px; }
+nav .brand small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+nav a { display: block; padding: 7px 10px; border-radius: 6px; color: var(--ink); }
+nav a.on { background: var(--soft); font-weight: 600; text-decoration: none; }
+nav a:hover { background: var(--soft); text-decoration: none; }
+nav .proj { margin: 0 4px 14px; }
+main { padding: 22px 28px 60px; max-width: 1180px; width: 100%; min-width: 0; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 22px 0 8px; }
+.sub { color: var(--muted); margin: 0 0 16px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; box-shadow: var(--shadow); margin-bottom: 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.stat .k { color: var(--muted); font-size: 12px; }
+.stat .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.stat .n { color: var(--muted); font-size: 12px; }
+.tbl { width: 100%; overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tr.click { cursor: pointer; } tr.click:hover td { background: var(--soft); }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; background: var(--soft); color: var(--muted); white-space: nowrap; }
+.pill.good { background: var(--good-bg); color: var(--good); } .pill.bad { background: var(--bad-bg); color: var(--bad); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); } .pill.blue { background: var(--soft); color: var(--accent); }
+button, .btn { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: 6px 12px; border-radius: 7px; cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.danger { color: var(--bad); }
+button:disabled { opacity: .5; cursor: default; }
+input, select, textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; max-width: 100%; }
+textarea { width: 100%; min-height: 70px; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.row > * { flex: 0 0 auto; }
+.spacer { flex: 1 1 auto; }
+.bar { height: 6px; background: var(--soft); border-radius: 99px; overflow: hidden; min-width: 60px; }
+.bar > i { display: block; height: 100%; background: var(--accent); }
+.muted { color: var(--muted); }
+.empty { color: var(--muted); padding: 18px; text-align: center; border: 1px dashed var(--line); border-radius: 10px; }
+.toast { position: fixed; bottom: 16px; right: 16px; background: var(--ink); color: var(--bg); padding: 10px 14px; border-radius: 8px; max-width: 420px; z-index: 9; }
+.diff del { background: var(--bad-bg); color: var(--bad); text-decoration: none; display: block; }
+.diff ins { background: var(--good-bg); color: var(--good); text-decoration: none; display: block; }
+.tree { margin-left: 16px; border-left: 2px solid var(--line); padding-left: 10px; }
+.login { max-width: 420px; margin: 12vh auto; }
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; }
+  nav { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  nav .brand { padding: 0 8px 0 0; width: 100%; } nav .proj { margin: 4px 0; width: 100%; }
+  main { padding: 16px; }
+  .split { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+"use strict";
+const S = { key: "", me: null, projects: [], pid: null };
+try { S.key = sessionStorage.getItem("sia_key") || ""; S.pid = localStorage.getItem("sia_pid"); } catch (e) {}
+const $ = (sel) => document.querySelector(sel);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const j = (v) => esc(typeof v === "string" ? v : JSON.stringify(v, null, 2));
+const short = (v, n = 90) => { const s = typeof v === "string" ? v : JSON.stringify(v); return esc(s && s.length > n ? s.slice(0, n) + "…" : s); };
+const ago = (t) => { if (!t) return "–"; const s = Date.now() / 1000 - t; if (s < 60) return "just now"; if (s < 3600) return Math.floor(s / 60) + " min ago"; if (s < 86400) return Math.floor(s / 3600) + " h ago"; return new Date(t * 1000).toLocaleDateString(); };
+const when = (t) => t ? new Date(t * 1000).toLocaleString() : "–";
+const ms = (v) => v == null ? "–" : v < 1000 ? Math.round(v) + " ms" : (v / 1000).toFixed(1) + " s";
+const pct = (v) => v == null ? "–" : (v * 100).toFixed(1) + "%";
+const num = (v, d = 3) => v == null ? "–" : Number(v).toFixed(d);
+const int = (v) => v == null ? "–" : Number(v).toLocaleString();
+const VERDICT = { improved: "good", regressed: "bad", inconclusive: "warn", no_improvement: "" };
+const STATUS = { success: "good", error: "bad", running: "blue", verified: "good", rejected: "bad", pending: "warn",
+                 approved: "good", candidate: "blue" };
+const pill = (v, cls) => `<span class="pill ${cls ?? STATUS[v] ?? VERDICT[v] ?? ""}">${esc(v)}</span>`;
+const bar = (v) => `<div class="bar" title="${pct(v)}"><i style="width:${Math.max(0, Math.min(1, v || 0)) * 100}%"></i></div>`;
+const P = () => `/projects/${S.pid}`;
+
+function toast(msg) {
+  const t = document.createElement("div"); t.className = "toast"; t.textContent = msg;
+  document.body.appendChild(t); setTimeout(() => t.remove(), 5000);
+}
+
+async function api(path, opts = {}) {
+  const headers = {};
+  if (S.key) headers.Authorization = "Bearer " + S.key;
+  if (opts.body !== undefined) headers["Content-Type"] = "application/json";
+  const r = await fetch("/v1" + path, { method: opts.method || (opts.body !== undefined ? "POST" : "GET"), headers,
+                                        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined });
+  if (r.status === 401 && !opts.quiet) { logout(); throw new Error("Your key is invalid or was revoked."); }
+  if (!r.ok) {
+    let d = r.statusText; try { d = (await r.json()).detail; } catch (e) {}
+    throw new Error(typeof d === "string" ? d : JSON.stringify(d));
+  }
+  if (opts.raw) return r;
+  return r.status === 204 ? null : r.json();
+}
+
+async function download(path, filename) {
+  const r = await api(path, { raw: true });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(await r.blob()); a.download = filename;
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function logout() { S.key = ""; S.me = null; try { sessionStorage.removeItem("sia_key"); } catch (e) {} renderLogin(); }
+
+// --- shell ------------------------------------------------------------------
+const NAV = [["overview", "Overview"], ["runs", "Runs"], ["datasets", "Datasets"], ["evals", "Evaluations"],
+             ["lab", "Improvement lab"], ["project", "Project & keys"], ["usage", "Usage & plan"]];
+
+function shell(view, body) {
+  const opts = S.projects.map((p) => `<option value="${esc(p.id)}" ${p.id === S.pid ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+  $("#root").innerHTML = `<div class="app"><nav>
+    <div class="brand">SIA DevTools<small>${esc(S.me.local_mode ? "local mode" : S.me.name + " · " + S.me.plan)}</small></div>
+    <div class="proj"><select id="proj" aria-label="Project" style="width:100%">${opts}<option value="__new">+ New project…</option></select></div>
+    ${NAV.map(([k, label]) => `<a href="#/${k}" class="${view === k ? "on" : ""}">${label}</a>`).join("")}
+    ${S.me.local_mode ? "" : `<a href="#" data-act="logout">Sign out</a>`}
+  </nav><main>${body}</main></div>`;
+  $("#proj").onchange = async (e) => {
+    if (e.target.value === "__new") {
+      const name = prompt("Project name (letters, digits, - _ .)"); if (!name) return route();
+      try { const p = await api("/projects", { body: { name } }); await loadProjects(); selectProject(p.id); } catch (err) { toast(err.message); route(); }
+    } else selectProject(e.target.value);
+  };
+}
+
+function selectProject(id) { S.pid = id; try { localStorage.setItem("sia_pid", id); } catch (e) {} route(); }
+
+async function loadProjects() {
+  S.projects = await api("/projects");
+  if (!S.projects.some((p) => p.id === S.pid)) S.pid = S.projects[0]?.id || null;
+}
+
+function renderLogin(err) {
+  $("#root").innerHTML = `<div class="login card"><h1>SIA DevTools</h1>
+    <p class="sub">Paste a <b>full-scope</b> API key. It stays in this browser tab only (session storage) and is sent
+    only to this server.</p>
+    <form data-form="login"><label for="k">API key</label><input id="k" name="key" type="password" autocomplete="off" style="width:100%" required>
+    <div class="row" style="margin-top:12px"><button class="primary">Sign in</button></div>
+    ${err ? `<p style="color:var(--bad)">${esc(err)}</p>` : ""}</form>
+    <p class="muted" style="font-size:12px">Running locally? <code>sia dashboard</code> opens this page without a key.</p></div>`;
+}
+
+// --- views ------------------------------------------------------------------
+const V = {};
+
+V.overview = async () => {
+  const o = await api(P() + "/overview");
+  const latest = o.latest_comparison;
+  const ev = o.evaluations;
+  return `<h1>Overview</h1><p class="sub">Production runs only (evaluation traffic excluded). All numbers come from stored data.</p>
+  <div class="grid">
+    <div class="stat"><div class="k">Runs</div><div class="v">${int(o.runs)}</div></div>
+    <div class="stat"><div class="k">Error rate</div><div class="v">${pct(o.error_rate)}</div><div class="n">${int(o.errors)} errors</div></div>
+    <div class="stat"><div class="k">Avg latency</div><div class="v">${ms(o.avg_latency_ms)}</div></div>
+    <div class="stat"><div class="k">Tokens</div><div class="v">${int((o.prompt_tokens || 0) + (o.completion_tokens || 0))}</div><div class="n">${o.cost != null ? "$" + Number(o.cost).toFixed(4) + " reported cost" : "no cost reported"}</div></div>
+    <div class="stat"><div class="k">Feedback</div><div class="v">${int(o.feedback.pending || 0)}</div><div class="n">pending review · ${int(o.feedback.verified || 0)} verified</div></div>
+    <div class="stat"><div class="k">Latest eval score</div><div class="v">${ev[0] ? num(ev[0].summary.score) : "–"}</div><div class="n">${ev[0] ? esc(ev[0].dataset_name) + " v" + ev[0].dataset_version : "no evaluations yet"}</div></div>
+  </div>
+  <div class="split">
+  <div class="card"><h2 style="margin-top:0">Latest improvement decision</h2>${latest ? `
+    <p>${pill(latest.verdict)} ${esc(latest.reason)}</p>
+    <p class="muted">${verLabel(latest.baseline)} ${num(latest.baseline.score)} → ${verLabel(latest.candidate)} ${num(latest.candidate.score)} on ${latest.n} paired examples · ${ago(latest.created)}</p>
+    <a href="#/compare/${esc(latest.id)}">Open comparison</a>` : `<p class="empty">No comparisons yet.</p>`}</div>
+  <div class="card"><h2 style="margin-top:0">Recent failures</h2>${o.recent_failures.length ? `<div class="tbl"><table>
+    ${o.recent_failures.map((r) => `<tr class="click" data-go="#/runs/${esc(r.id)}"><td>${esc(r.name)}</td><td class="muted">${short(r.error, 70)}</td><td class="muted">${ago(r.started)}</td></tr>`).join("")}</table></div>` : `<p class="empty">No failed runs.</p>`}</div>
+  </div>
+  <div class="card"><h2 style="margin-top:0">Quality by prompt version</h2>${o.by_version.length ? `<div class="tbl"><table>
+    <tr><th>Version</th><th class="num">Runs</th><th class="num">Error rate</th><th class="num">Avg latency</th><th class="num">Avg feedback</th></tr>
+    ${o.by_version.map((b) => `<tr><td>${b.version == null ? '<span class="muted">untracked</span>' : esc(b.version_name) + "@" + b.version}${o.active_versions.some((a) => a.name === b.version_name && a.version === b.version) ? " " + pill("active", "good") : ""}</td>
+      <td class="num">${int(b.runs)}</td><td class="num">${pct(b.errors / b.runs)}</td><td class="num">${ms(b.avg_latency_ms)}</td><td class="num">${b.avg_rating == null ? "–" : num(b.avg_rating, 2)}</td></tr>`).join("")}</table></div>` : `<p class="empty">No runs yet. ${snippet()}</p>`}</div>
+  <div class="card"><h2 style="margin-top:0">Recent evaluations</h2>${evalTable(ev)}</div>`;
+};
+
+const verLabel = (s) => s.version != null ? esc(s.version_name) + "@" + s.version : s.prompt_sha ? "prompt " + esc(s.prompt_sha.slice(0, 8)) : "no prompt";
+
+function snippet() {
+  return `<pre style="text-align:left">from sia_devtools import SIAClient
+sia = SIAClient(${S.me.local_mode ? "" : 'api_key="sia_...", '}project="${esc(S.projects.find((p) => p.id === S.pid)?.name || "my-agent")}")
+
+@sia.trace
+def answer(question):
+    return my_existing_agent(question)</pre>`;
+}
+
+V.runs = async (q) => {
+  const p = new URLSearchParams({ root_only: "true", limit: "50", offset: q.offset || "0" });
+  for (const k of ["status", "q", "tag"]) if (q[k]) p.set(k, q[k]);
+  const page = await api(P() + "/runs?" + p);
+  return `<h1>Runs</h1><p class="sub">Top-level runs, newest first. Open one to see nested steps, errors and feedback.</p>
+  <form class="row card" data-form="runfilter">
+    <input name="q" placeholder="Search input, output, error" value="${esc(q.q)}" style="flex:1 1 220px">
+    <select name="status"><option value="">Any status</option>${["success", "error", "running"].map((s) => `<option ${q.status === s ? "selected" : ""}>${s}</option>`).join("")}</select>
+    <input name="tag" placeholder="Tag" value="${esc(q.tag)}" style="width:120px"><button>Filter</button>
+    <span class="spacer"></span><button type="button" data-act="exportRuns">Export JSONL</button></form>
+  ${page.items.length ? `<div class="card tbl"><table><tr><th>Name</th><th>Status</th><th>Input</th><th class="num">Latency</th><th>Version</th><th>When</th></tr>
+  ${page.items.map((r) => `<tr class="click" data-go="#/runs/${esc(r.id)}"><td>${esc(r.name)}${r.tags.includes("eval") ? " " + pill("eval", "blue") : ""}</td><td>${pill(r.status)}</td><td class="muted">${short(r.input, 70)}</td><td class="num">${ms(r.duration_ms)}</td><td>${r.version != null ? esc(r.version_name) + "@" + r.version : "–"}</td><td class="muted">${ago(r.started)}</td></tr>`).join("")}
+  </table></div>` : `<div class="empty">No runs match.</div>`}
+  <div class="row">${+(q.offset || 0) > 0 ? `<a class="btn" href="#/runs?${new URLSearchParams({ ...q, offset: Math.max(0, +q.offset - 50) })}">Newer</a>` : ""}
+  ${page.next_offset != null ? `<a class="btn" href="#/runs?${new URLSearchParams({ ...q, offset: page.next_offset })}">Older</a>` : ""}</div>`;
+};
+
+V.run = async (q, id) => {
+  const r = await api(P() + "/runs/" + encodeURIComponent(id));
+  const kids = {}; for (const c of r.children) (kids[c.parent_id] ||= []).push(c);
+  const tree = (pid) => (kids[pid] || []).map((c) => `<div class="tree"><div class="row">${pill(c.status)} <b>${esc(c.name)}</b> <span class="muted">${ms(c.duration_ms)}</span></div>
+    <details><summary class="muted">input / output</summary><pre>${j(c.input)}</pre><pre>${j(c.output)}</pre>${c.error ? `<pre>${esc(c.error)}</pre>` : ""}</details>${tree(c.id)}</div>`).join("");
+  return `<p><a href="#/runs">← Runs</a></p><h1>${esc(r.name)} ${pill(r.status)}</h1>
+  <p class="sub mono">${esc(r.id)} · ${when(r.started)} · ${ms(r.duration_ms)}${r.model ? " · " + esc(r.model) : ""}${r.prompt_tokens != null ? " · " + int(r.prompt_tokens) + " + " + int(r.completion_tokens) + " tokens" : ""}${r.version != null ? " · " + esc(r.version_name) + "@" + r.version : ""}</p>
+  <div class="split"><div class="card"><h2 style="margin-top:0">Input</h2><pre>${j(r.input)}</pre></div>
+  <div class="card"><h2 style="margin-top:0">Output</h2><pre>${j(r.output)}</pre></div></div>
+  ${r.error ? `<div class="card"><h2 style="margin-top:0">Error</h2><pre>${esc(r.error)}</pre></div>` : ""}
+  <div class="card"><h2 style="margin-top:0">Steps</h2>${r.children.length ? tree(r.id) : `<p class="muted">No nested runs recorded.</p>`}</div>
+  <div class="split"><div class="card"><h2 style="margin-top:0">Metadata</h2><pre>${j({ tags: r.tags, metadata: r.metadata, scores: r.scores })}</pre></div>
+  <div class="card"><h2 style="margin-top:0">Feedback</h2>${r.feedback.length ? r.feedback.map((f) => `<p>${pill(f.status)} ${f.rating > 0 ? "👍" : "👎"} ${esc(f.category || "")} <span class="muted">${esc(f.explanation || "")}</span></p>${f.correction != null ? `<pre>${j(f.correction)}</pre>` : ""}`).join("") : `<p class="muted">None yet.</p>`}
+    <form data-form="feedback" data-run="${esc(r.id)}"><label>Rating</label><select name="rating"><option value="-1">👎 Wrong</option><option value="1">👍 Good</option></select>
+    <label>Correct output (optional; becomes a test case only after review)</label><textarea name="correction"></textarea>
+    <div class="row"><input name="category" placeholder="Failure category"><input name="explanation" placeholder="Why" style="flex:1 1 200px"></div>
+    <div class="row" style="margin-top:8px"><button class="primary">Add feedback</button></div></form></div></div>`;
+};
+
+function evalTable(items) {
+  if (!items.length) return `<p class="empty">No evaluations yet. Run one with the SDK or <code>sia eval run</code>.</p>`;
+  return `<div class="tbl"><table><tr><th>When</th><th>Dataset</th><th>Version</th><th class="num">Score</th><th></th><th class="num">Pass rate</th><th class="num">Errors</th><th>Scorers</th></tr>
+  ${items.map((e) => `<tr class="click" data-go="#/evals/${esc(e.id)}"><td class="muted">${ago(e.created)}</td><td>${esc(e.dataset_name)} v${e.dataset_version}</td><td>${verLabel(e)}</td>
+    <td class="num">${num(e.summary.score)}</td><td style="width:80px">${bar(e.summary.score)}</td><td class="num">${pct(e.summary.pass_rate)}</td><td class="num">${e.summary.errors}</td>
+    <td class="muted">${e.config.scorers.map((s) => esc(s.name) + (s.kind === "model" ? " (model)" : "")).join(", ")}</td></tr>`).join("")}</table></div>`;
+}
+
+V.datasets = async () => {
+  const [ds, fb] = await Promise.all([api(P() + "/datasets"), api(P() + "/feedback?status=pending&limit=100")]);
+  return `<h1>Datasets</h1><p class="sub">Versioned test cases. Every change creates a new version; evaluations pin the version they ran on.</p>
+  <form class="row card" data-form="newds"><input name="name" placeholder="new-dataset-name" required><button class="primary">Create dataset</button></form>
+  ${ds.length ? `<div class="card tbl"><table><tr><th>Name</th><th class="num">Version</th><th class="num">Examples</th><th>Created</th></tr>
+  ${ds.map((d) => `<tr class="click" data-go="#/datasets/${esc(d.id)}"><td>${esc(d.name)}</td><td class="num">${d.version}</td><td class="num">${d.examples}</td><td class="muted">${ago(d.created)}</td></tr>`).join("")}</table></div>` : `<div class="empty">No datasets yet.</div>`}
+  <h2>Feedback waiting for review (${fb.items.length})</h2>
+  <p class="muted">Corrections can be wrong or malicious, so nothing enters a dataset until a reviewer verifies it.</p>
+  ${fb.items.length ? fb.items.map((f) => reviewCard(f, ds)).join("") : `<div class="empty">Nothing pending.</div>`}`;
+};
+
+function reviewCard(f, ds) {
+  return `<div class="card"><div class="row">${f.rating > 0 ? "👍" : "👎"} <b>${esc(f.category || "uncategorised")}</b> <span class="muted">on <a href="#/runs/${esc(f.run_id)}">${esc(f.run_name || f.run_id)}</a> · ${ago(f.created)}${f.reviewer ? " · by " + esc(f.reviewer) : ""}</span></div>
+  ${f.explanation ? `<p>${esc(f.explanation)}</p>` : ""}
+  <div class="split"><div><label>Run input</label><pre>${j(f.run_input)}</pre><label>Run output</label><pre>${j(f.run_output)}</pre></div>
+  <form data-form="review" data-fb="${esc(f.id)}"><label>Expected output for the test case</label><textarea name="expected">${f.correction != null ? j(f.correction) : ""}</textarea>
+    <label>Add to dataset</label><select name="dataset"><option value="">(verify without adding)</option>${ds.map((d) => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join("")}</select>
+    <label><input type="checkbox" name="critical"> Critical: this case may never regress</label>
+    <input name="note" placeholder="Review note (optional)" style="width:100%">
+    <div class="row" style="margin-top:8px"><button class="primary" name="verdict" value="verified">Verify</button><button class="danger" name="verdict" value="rejected">Reject</button></div></form></div></div>`;
+}
+
+V.dataset = async (q, id) => {
+  const v = q.version ? "?version=" + encodeURIComponent(q.version) : "";
+  const [d, hist, evs] = await Promise.all([api(P() + "/datasets/" + id + v), api(P() + "/datasets/" + id + "/history"),
+                                           api(P() + "/evaluations?dataset_id=" + id)]);
+  const latest = d.snapshot_version === d.version;
+  return `<p><a href="#/datasets">← Datasets</a></p><h1>${esc(d.name)}</h1>
+  <p class="sub">Showing version ${d.snapshot_version} of ${d.version}${latest ? "" : ` (read-only history · <a href="#/datasets/${esc(id)}">latest</a>)`} · ${d.examples.length} examples</p>
+  ${latest ? `<details class="card"><summary><b>Add an example</b></summary><form data-form="addex" data-ds="${esc(id)}">
+    <label>Input (JSON or plain text)</label><textarea name="input" required></textarea>
+    <label>Expected output (JSON or plain text, optional)</label><textarea name="expected"></textarea>
+    <label><input type="checkbox" name="critical"> Critical</label><div class="row"><button class="primary">Add</button></div></form></details>` : ""}
+  <div class="card tbl"><table><tr><th>#</th><th>Input</th><th>Expected</th><th>Source</th><th></th></tr>
+  ${d.examples.map((e) => `<tr><td class="mono">${e.id}${e.critical ? " " + pill("critical", "bad") : ""}</td><td><pre>${j(e.input)}</pre></td><td><pre>${j(e.expected_output)}</pre></td>
+    <td class="muted">${esc(e.source)}${e.source_run_id ? `<br><a href="#/runs/${esc(e.source_run_id)}">source run</a>` : ""}</td>
+    <td>${latest ? `<button data-act="editex" data-ds="${esc(id)}" data-ex="${e.id}">Edit</button> <button class="danger" data-act="delex" data-ds="${esc(id)}" data-ex="${e.id}">Delete</button>` : ""}</td></tr>`).join("")}</table></div>
+  <h2>Versions</h2><div class="card tbl"><table><tr><th>Version</th><th>Added</th><th>Edited</th><th>Removed</th></tr>
+  ${hist.map((h) => `<tr class="click" data-go="#/datasets/${esc(id)}?version=${h.version}"><td>v${h.version}</td><td>${h.added.join(", ") || "–"}</td><td>${h.edited.join(", ") || "–"}</td><td>${h.removed.join(", ") || "–"}</td></tr>`).join("")}</table></div>
+  <h2>Evaluations on this dataset</h2><div class="card">${evalTable(evs.items)}
+  <p class="muted">Evaluations run your application code, so they start from your machine or CI:</p>
+  <pre>sia eval run --project ${esc(S.projects.find((p) => p.id === S.pid)?.name)} --dataset ${esc(d.name)} --target app:answer --scorer exact_match --version active</pre></div>`;
+};
+
+V.evals = async (q) => {
+  const evs = await api(P() + "/evaluations?limit=100");
+  const cmps = await api(P() + "/comparisons?limit=20");
+  const opts = evs.items.map((e) => `<option value="${esc(e.id)}">${ago(e.created)} · ${esc(e.dataset_name)} v${e.dataset_version} · ${verLabel(e)} · ${num(e.summary.score)}</option>`).join("");
+  return `<h1>Evaluations</h1><p class="sub">Scores per evaluation. Compare two runs of the same dataset version to get a verdict.</p>
+  <form class="card" data-form="compare"><div class="row"><div><label>Baseline</label><select name="a">${opts}</select></div>
+    <div><label>Candidate</label><select name="b">${opts}</select></div><div><label>&nbsp;</label><button class="primary">Compare</button></div></div>
+    <p class="muted" style="margin-bottom:0">Uses the project's evaluation policy. Only these comparisons can approve a release.</p></form>
+  <div class="card">${evalTable(evs.items)}</div>
+  <h2>Comparisons</h2><div class="card">${cmpTable(cmps)}</div>`;
+};
+
+function cmpTable(cmps) {
+  if (!cmps.length) return `<p class="empty">No comparisons yet.</p>`;
+  return `<div class="tbl"><table><tr><th>When</th><th>Verdict</th><th>Baseline → candidate</th><th class="num">Mean gain</th><th class="num">n</th><th class="num">Regressions</th></tr>
+  ${cmps.map((c) => `<tr class="click" data-go="#/compare/${esc(c.id)}"><td class="muted">${ago(c.created)}</td><td>${pill(c.verdict)}</td><td>${verLabel(c.baseline)} ${num(c.baseline.score)} → ${verLabel(c.candidate)} ${num(c.candidate.score)}</td>
+    <td class="num">${(c.mean_gain >= 0 ? "+" : "") + num(c.mean_gain)}</td><td class="num">${c.n}</td><td class="num">${c.regressions.length}${c.critical_regressions.length ? " " + pill("critical", "bad") : ""}</td></tr>`).join("")}</table></div>`;
+}
+
+V.eval = async (q, id) => {
+  const e = await api(P() + "/evaluations/" + id);
+  const s = e.summary;
+  return `<p><a href="#/evals">← Evaluations</a></p><h1>Evaluation ${esc(e.id.slice(0, 10))}</h1>
+  <p class="sub">${esc(e.dataset_name)} v${e.dataset_version} · ${verLabel(e)} · ${when(e.created)} · ${esc(e.config.trials)} trial(s) · pass threshold ${esc(e.config.pass_threshold)}</p>
+  <div class="grid"><div class="stat"><div class="k">Score (${esc(s.primary)})</div><div class="v">${num(s.score)}</div></div>
+    <div class="stat"><div class="k">Pass rate</div><div class="v">${pct(s.pass_rate)}</div></div>
+    <div class="stat"><div class="k">Errors</div><div class="v">${s.errors}</div></div>
+    <div class="stat"><div class="k">Avg latency</div><div class="v">${ms(s.avg_latency_ms)}</div></div>
+    ${Object.entries(s.by_scorer).map(([k, v]) => `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${num(v)}</div></div>`).join("")}</div>
+  <div class="row"><button data-act="dl" data-path="${P()}/evaluations/${esc(id)}" data-file="evaluation-${esc(id)}.json">Export JSON</button>
+    <button data-act="dl" data-path="${P()}/evaluations/${esc(id)}?format=csv" data-file="evaluation-${esc(id)}.csv">Export CSV</button></div>
+  <h2>Configuration</h2><pre>${j(e.config)}</pre>
+  <h2>Per example</h2><div class="card tbl"><table><tr><th>#</th><th>Input</th><th>Expected</th><th>Output</th><th class="num">Score</th><th>Scores</th></tr>
+  ${e.results.map((r) => `<tr><td class="mono">${r.example_id}${r.critical ? " " + pill("critical", "bad") : ""}</td><td>${short(r.input, 120)}</td><td>${short(r.expected_output, 120)}</td>
+    <td>${r.error ? `<span style="color:var(--bad)">${esc(r.error)}</span>` : short(r.output, 160)}</td><td class="num">${pill(num(r.score, 2), r.passed ? "good" : "bad")}</td><td class="muted mono">${esc(JSON.stringify(r.scores))}</td></tr>`).join("")}</table></div>`;
+};
+
+V.compare = async (q, id) => {
+  const c = await api(P() + "/comparisons/" + id);
+  return `<p><a href="#/evals">← Evaluations</a></p><h1>Comparison ${pill(c.verdict)}</h1><p class="sub">${esc(c.reason)}</p>
+  <div class="grid"><div class="stat"><div class="k">Baseline · ${verLabel(c.baseline)}</div><div class="v">${num(c.baseline_mean)}</div><div class="n"><a href="#/evals/${esc(c.baseline.evaluation_id)}">evaluation</a></div></div>
+    <div class="stat"><div class="k">Candidate · ${verLabel(c.candidate)}</div><div class="v">${num(c.candidate_mean)}</div><div class="n"><a href="#/evals/${esc(c.candidate.evaluation_id)}">evaluation</a></div></div>
+    <div class="stat"><div class="k">Mean gain</div><div class="v">${(c.mean_gain >= 0 ? "+" : "") + num(c.mean_gain)}</div><div class="n">threshold ${num(c.threshold)} · SE ${num(c.std_error)}</div></div>
+    <div class="stat"><div class="k">Regressions</div><div class="v">${c.regressions.length}</div><div class="n">${c.critical_regressions.length} critical</div></div></div>
+  ${c.critical_regressions.length ? `<div class="card" style="border-color:var(--bad)">${pill("critical regression", "bad")} Examples ${esc(c.critical_regressions.join(", "))} got worse. This candidate cannot be approved on this evidence.</div>` : ""}
+  <div class="card"><h2 style="margin-top:0">Acceptance criteria used</h2><pre>${j(c.policy)}</pre><p class="muted">${c.project_policy ? "Project policy: usable for approval." : "Policy was overridden for this comparison, so it cannot approve a release."}</p></div>
+  <div class="card tbl"><table><tr><th>#</th><th class="num">Baseline</th><th class="num">Candidate</th><th class="num">Change</th></tr>
+  ${c.per_example.map((r) => `<tr><td class="mono">${r.example_id}${r.critical ? " " + pill("critical", "bad") : ""}</td><td class="num">${num(r.baseline, 2)}</td><td class="num">${num(r.candidate, 2)}</td>
+    <td class="num">${r.delta > 0 ? pill("+" + num(r.delta, 2), "good") : r.delta < 0 ? pill(num(r.delta, 2), "bad") : "0"}</td></tr>`).join("")}</table></div>`;
+};
+
+V.lab = async () => {
+  const [vs, cmps] = await Promise.all([api(P() + "/versions"), api(P() + "/comparisons?limit=50")]);
+  const names = [...new Set(vs.map((v) => v.name))];
+  return `<h1>Improvement lab</h1><p class="sub">Candidates are generated, evaluated, approved and activated as separate steps. Nothing reaches production without approval.</p>
+  ${vs.length ? names.map((n) => `<h2>${esc(n)}</h2><div class="card tbl"><table><tr><th>Version</th><th>Status</th><th>Lessons</th><th>Decision</th><th>Created</th></tr>
+    ${vs.filter((v) => v.name === n).map((v) => `<tr class="click" data-go="#/lab/${esc(v.name)}/${v.version}"><td>@${v.version}${v.active ? " " + pill("active", "good") : ""}</td><td>${pill(v.status)}</td><td>${v.lessons.length}</td><td class="muted">${short(v.decision_reason || v.note || "", 80)}</td><td class="muted">${ago(v.created)}</td></tr>`).join("")}</table></div>`).join("")
+  : `<div class="empty">No versions yet. Register your current prompt with <code>sia.create_version(...)</code>, or let <code>sia improve</code> draft one from failures.</div>`}
+  <h2>Recent comparisons</h2><div class="card">${cmpTable(cmps)}</div>`;
+};
+
+function diff(a, b) {
+  const x = (a || "").split("\n"), y = (b || "").split("\n"), m = x.length, n = y.length;
+  const L = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) for (let k = n - 1; k >= 0; k--) L[i][k] = x[i] === y[k] ? L[i + 1][k + 1] + 1 : Math.max(L[i + 1][k], L[i][k + 1]);
+  let i = 0, k = 0, out = "";
+  while (i < m && k < n) {
+    if (x[i] === y[k]) { out += esc(x[i]) + "\n"; i++; k++; }
+    else if (L[i + 1][k] >= L[i][k + 1]) out += `<del>- ${esc(x[i++])}</del>`; else out += `<ins>+ ${esc(y[k++])}</ins>`;
+  }
+  while (i < m) out += `<del>- ${esc(x[i++])}</del>`;
+  while (k < n) out += `<ins>+ ${esc(y[k++])}</ins>`;
+  return out;
+}
+
+V.version = async (q, name, num_) => {
+  const [v, active, cmps] = await Promise.all([api(`${P()}/versions/${encodeURIComponent(name)}/${num_}`),
+    api(`${P()}/versions/active?name=${encodeURIComponent(name)}`), api(P() + "/comparisons?limit=100")]);
+  const mine = cmps.filter((c) => c.candidate.version_name === name && c.candidate.version === v.version);
+  const usable = mine.filter((c) => c.project_policy && (active ? c.baseline.version === active.version : true));
+  return `<p><a href="#/lab">← Improvement lab</a></p><h1>${esc(name)}@${v.version} ${pill(v.status)} ${v.active ? pill("active", "good") : ""}</h1>
+  <p class="sub">${esc(v.note || "")}${v.parent_version != null ? " · based on @" + v.parent_version : ""} · ${when(v.created)}${v.decision_reason ? " · decision: " + esc(v.decision_reason) : ""}</p>
+  <div class="split"><div class="card"><h2 style="margin-top:0">Content</h2><pre>${esc(v.content)}</pre></div>
+  <div class="card"><h2 style="margin-top:0">${active && !v.active ? `Change vs active @${active.version}` : "Change"}</h2>${active && !v.active ? `<pre class="diff">${diff(active.content, v.content)}</pre>` : `<p class="muted">This is the active version.</p>`}</div></div>
+  <div class="split"><div class="card"><h2 style="margin-top:0">Lessons extracted</h2>${v.lessons.length ? `<ul>${v.lessons.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>` : `<p class="muted">None recorded.</p>`}</div>
+  <div class="card"><h2 style="margin-top:0">Failure patterns</h2>${v.patterns.length ? `<ul>${v.patterns.map((p) => `<li>${esc(p.pattern)}${p.count ? ` <span class="muted">×${p.count}</span>` : ""}</li>`).join("")}</ul>` : `<p class="muted">None recorded.</p>`}</div></div>
+  <div class="card"><h2 style="margin-top:0">Evidence</h2>${cmpTable(mine)}</div>
+  ${v.status === "candidate" ? `<div class="card"><h2 style="margin-top:0">Decide</h2>
+    <form data-form="approve" data-name="${esc(name)}" data-v="${v.version}"><label>Comparison against the active version</label>
+    <select name="comparison"><option value="">(none)</option>${usable.map((c) => `<option value="${esc(c.id)}">${esc(c.verdict)} · gain ${num(c.mean_gain)} · ${ago(c.created)}</option>`).join("")}</select>
+    <label>Override reason (only if approving without an "improved" verdict; kept in the audit log)</label><input name="override" style="width:100%">
+    <div class="row" style="margin-top:8px"><button class="primary">Approve</button></div></form>
+    <form data-form="reject" data-name="${esc(name)}" data-v="${v.version}" style="margin-top:12px"><label>Rejection reason</label><input name="reason" style="width:100%">
+    <div class="row" style="margin-top:8px"><button class="danger">Reject</button></div></form></div>` : ""}
+  ${v.status === "approved" && !v.active ? `<div class="card"><button class="primary" data-act="activate" data-name="${esc(name)}" data-v="${v.version}">${active && active.version > v.version ? "Roll back to" : "Activate"} @${v.version}</button>
+    <span class="muted">Production will receive this text from <code>get_prompt()</code> within its cache time.</span></div>` : ""}`;
+};
+
+V.project = async () => {
+  const p = await api(P());
+  const [keys, audit] = await Promise.all([api("/keys"), api(P() + "/audit?limit=40")]);
+  const s = p.settings;
+  return `<h1>Project & keys</h1><p class="sub mono">${esc(p.name)} · ${esc(p.id)}</p>
+  <div class="card"><h2 style="margin-top:0">Install</h2><pre>pip install "sia-devtools @ git+https://github.com/SrijithLegend/Self-Improving-Agent"</pre>${snippet()}</div>
+  <form class="card" data-form="settings"><h2 style="margin-top:0">Settings</h2>
+    <label>Redaction rules (applied before anything is stored): built-ins secrets, cards, email, phone, or a regex. One per line.</label>
+    <textarea name="redact">${esc(s.redact.join("\n"))}</textarea>
+    <label>Retention (days, empty = plan default)</label><input name="retention_days" type="number" min="1" value="${esc(s.retention_days ?? "")}">
+    <label>Evaluation policy (acceptance criteria for releases)</label><textarea name="policy">${j(s.policy)}</textarea>
+    <label>Locked text: lines every version must keep verbatim (for example safety rules). One per line.</label>
+    <textarea name="locked_text">${esc(s.locked_text.join("\n"))}</textarea>
+    <div class="row" style="margin-top:8px"><button class="primary">Save settings</button></div></form>
+  ${S.me.local_mode ? "" : `<div class="card"><h2 style="margin-top:0">API keys (organization)</h2><p class="muted">Use <b>ingest</b> keys in production apps: they can send runs and feedback and read the active prompt, nothing else.</p>
+    <div class="tbl"><table><tr><th>Name</th><th>Prefix</th><th>Scope</th><th>Created</th><th>Last used</th><th></th></tr>
+    ${keys.map((k) => `<tr><td>${esc(k.name)}${k.id === S.me.key_id ? " " + pill("this session", "blue") : ""}</td><td class="mono">${esc(k.prefix)}…</td><td>${esc(k.scope)}</td><td class="muted">${ago(k.created)}</td><td class="muted">${ago(k.last_used)}</td>
+      <td>${k.revoked ? pill("revoked", "bad") : k.id === S.me.key_id ? `<button data-act="rotate">Rotate</button>` : `<button class="danger" data-act="revoke" data-id="${esc(k.id)}">Revoke</button>`}</td></tr>`).join("")}</table></div>
+    <form class="row" data-form="newkey" style="margin-top:10px"><input name="name" placeholder="Key name" required><select name="scope"><option>ingest</option><option>full</option></select><button>Create key</button></form>
+    <div id="newkey"></div></div>`}
+  <div class="card"><h2 style="margin-top:0">Audit log</h2><div class="tbl"><table><tr><th>When</th><th>Actor</th><th>Action</th><th>Detail</th></tr>
+    ${audit.map((a) => `<tr><td class="muted">${when(a.created)}</td><td>${esc(a.actor || "–")}</td><td>${esc(a.action)}</td><td class="muted mono">${short(a.detail, 120)}</td></tr>`).join("")}</table></div></div>`;
+};
+
+V.usage = async () => {
+  const u = await api("/usage?days=30");
+  const rm = u.runs_this_month;
+  return `<h1>Usage & plan</h1><p class="sub">Plan: <b>${esc(u.plan)}</b>. Limits are enforced by the server. Prices are not set yet; plans are early hypotheses.</p>
+  <div class="grid"><div class="stat"><div class="k">Runs this month</div><div class="v">${int(rm.used)}</div><div class="n">${rm.included == null ? "no limit" : int(rm.included) + " included"}</div></div>
+    <div class="stat"><div class="k">Overage</div><div class="v">${int(rm.overage)}</div><div class="n">${u.limits ? (u.limits.overage ? "billed beyond included" : "free plan: blocked at the limit") : "local mode"}</div></div>
+    <div class="stat"><div class="k">Requests (30 days)</div><div class="v">${int(u.requests)}</div></div>
+    <div class="stat"><div class="k">Model calls (30 days)</div><div class="v">${int(u.llm_calls)}</div><div class="n">managed agents only</div></div></div>
+  ${u.limits ? `<div class="card"><h2 style="margin-top:0">Plan limits</h2><pre>${j(u.limits)}</pre></div>` : ""}
+  <div class="card tbl"><table><tr><th>Action</th><th class="num">Requests</th><th class="num">Units</th><th class="num">Model calls</th></tr>
+  ${Object.entries(u.by_action).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="num">${int(v.requests)}</td><td class="num">${int(v.units)}</td><td class="num">${int(v.llm_calls)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No usage in the last 30 days.</td></tr>`}</table></div>`;
+};
+
+// --- router -------------------------------------------------------------------
+async function route() {
+  const [path, qs] = (location.hash.slice(2) || "overview").split("?");
+  const q = Object.fromEntries(new URLSearchParams(qs || ""));
+  const [view, a, b] = path.split("/").map(decodeURIComponent);
+  const table = { overview: V.overview, runs: a ? V.run : V.runs, datasets: a ? V.dataset : V.datasets, evals: a ? V.eval : V.evals,
+                  compare: V.compare, lab: a ? V.version : V.lab, project: V.project, usage: V.usage };
+  const fn = table[view] || V.overview;
+  const navKey = view === "compare" ? "evals" : (table[view] ? view : "overview");
+  if (!S.pid && !["usage"].includes(view)) {
+    shell(navKey, `<h1>Welcome</h1><p class="sub">Create a project to start, or call <code>SIAClient(project=...)</code> from your app.</p>
+      <form class="row card" data-form="newproj"><input name="name" placeholder="my-ai-agent" required><button class="primary">Create project</button></form>`);
+    return;
+  }
+  shell(navKey, `<p class="muted">Loading…</p>`);
+  try { $("main").innerHTML = await fn(q, a, b); }
+  catch (e) { $("main").innerHTML = `<div class="card"><b>Could not load this page.</b><p class="muted">${esc(e.message)}</p></div>`; }
+}
+
+const parse = (s) => { const t = (s || "").trim(); if (!t) return null; try { return JSON.parse(t); } catch (e) { return t; } };
+const lines = (s) => (s || "").split("\n").map((x) => x.trim()).filter(Boolean);
+
+const FORMS = {
+  async login(f) {
+    S.key = f.key.value.trim();
+    try { S.me = await api("/me", { quiet: true }); if (S.me.scope !== "full") throw new Error("This is an ingest key; the dashboard needs a full-scope key."); }
+    catch (e) { S.key = ""; return renderLogin(e.message); }
+    try { sessionStorage.setItem("sia_key", S.key); } catch (e) {}
+    await loadProjects(); route();
+  },
+  async newproj(f) { const p = await api("/projects", { body: { name: f.name.value.trim() } }); await loadProjects(); selectProject(p.id); },
+  runfilter(f) { const q = new URLSearchParams(); for (const k of ["q", "status", "tag"]) if (f[k].value) q.set(k, f[k].value); location.hash = "#/runs?" + q; },
+  async feedback(f) {
+    await api(`${P()}/runs/${encodeURIComponent(f.dataset.run)}/feedback`, { body: { rating: +f.rating.value, correction: parse(f.correction.value),
+      category: f.category.value || null, explanation: f.explanation.value || null, reviewer: "dashboard" } });
+    toast("Feedback saved as pending. Review it under Datasets."); route();
+  },
+  async newds(f) { const d = await api(P() + "/datasets", { body: { name: f.name.value.trim() } }); location.hash = "#/datasets/" + d.id; },
+  async review(f, submitter) {
+    const verdict = submitter?.value || "verified";
+    await api(`${P()}/feedback/${encodeURIComponent(f.dataset.fb)}/review`, { body: { status: verdict,
+      dataset_id: verdict === "verified" && f.dataset.value ? f.dataset.value : null, expected_output: parse(f.expected.value),
+      critical: f.critical.checked, note: f.note.value || null } });
+    toast(verdict === "verified" ? "Verified." : "Rejected."); route();
+  },
+  async addex(f) {
+    await api(`${P()}/datasets/${f.dataset.ds}/examples`, { body: { examples: [{ input: parse(f.input.value), expected_output: parse(f.expected.value), critical: f.critical.checked }] } });
+    toast("Example added; the dataset has a new version."); route();
+  },
+  async compare(f) {
+    if (f.a.value === f.b.value) return toast("Pick two different evaluations.");
+    const c = await api(P() + "/comparisons", { body: { baseline_eval_id: f.a.value, candidate_eval_id: f.b.value } });
+    location.hash = "#/compare/" + c.id;
+  },
+  async approve(f) {
+    await api(`${P()}/versions/${encodeURIComponent(f.dataset.name)}/${f.dataset.v}/approve`, { body: { comparison_id: f.comparison.value || null, override_reason: f.override.value || null } });
+    toast("Approved. Activate it when you are ready."); route();
+  },
+  async reject(f) { await api(`${P()}/versions/${encodeURIComponent(f.dataset.name)}/${f.dataset.v}/reject`, { body: { reason: f.reason.value || null } }); route(); },
+  async settings(f) {
+    let policy; try { policy = JSON.parse(f.policy.value); } catch (e) { return toast("Policy must be valid JSON."); }
+    await api(P(), { method: "PATCH", body: { settings: { redact: lines(f.redact.value), locked_text: lines(f.locked_text.value), policy,
+      retention_days: f.retention_days.value ? +f.retention_days.value : null } } });
+    toast("Settings saved."); route();
+  },
+  async newkey(f) {
+    const k = await api("/keys", { body: { name: f.name.value, scope: f.scope.value } });
+    await route();
+    $("#newkey").innerHTML = `<p><b>Copy this key now; it will not be shown again:</b></p><pre>${esc(k.api_key)}</pre>`;
+  },
+};
+
+const ACTS = {
+  logout() { logout(); },
+  async exportRuns() { await download(P() + "/runs/export", "runs.jsonl"); },
+  async dl(d) { await download(d.path, d.file); },
+  async delex(d) { if (!confirm("Delete this example? Earlier versions keep it.")) return; await api(`${P()}/datasets/${d.ds}/examples/${d.ex}`, { method: "DELETE" }); route(); },
+  async editex(d) {
+    const ds = await api(`${P()}/datasets/${d.ds}`); const ex = ds.examples.find((e) => String(e.id) === d.ex);
+    const v = prompt("New expected output (JSON or text):", typeof ex.expected_output === "string" ? ex.expected_output : JSON.stringify(ex.expected_output));
+    if (v === null) return;
+    await api(`${P()}/datasets/${d.ds}/examples/${d.ex}`, { method: "PUT", body: { expected_output: parse(v) } }); toast("Saved as a new version."); route();
+  },
+  async activate(d) { await api(`${P()}/versions/${encodeURIComponent(d.name)}/${d.v}/activate`, { body: {} }); toast("Activated."); route(); },
+  async revoke(d) { if (!confirm("Revoke this key? Apps using it will stop sending data.")) return; await api(`/keys/${d.id}/revoke`, { body: {} }); route(); },
+  async rotate() {
+    if (!confirm("Rotate the key you are signed in with? The old one stops working immediately.")) return;
+    const k = await api("/keys/rotate", { body: {} }); S.key = k.api_key; try { sessionStorage.setItem("sia_key", S.key); } catch (e) {}
+    S.me = await api("/me"); await route(); $("#newkey").innerHTML = `<p><b>Your new key (shown once):</b></p><pre>${esc(k.api_key)}</pre>`;
+  },
+};
+
+document.addEventListener("click", async (e) => {
+  const go = e.target.closest("[data-go]"); if (go && !e.target.closest("a,button")) { location.hash = go.dataset.go; return; }
+  const a = e.target.closest("[data-act]"); if (!a) return;
+  e.preventDefault(); try { await ACTS[a.dataset.act](a.dataset); } catch (err) { toast(err.message); }
+});
+document.addEventListener("submit", async (e) => {
+  const f = e.target.closest("[data-form]"); if (!f) return;
+  e.preventDefault(); try { await FORMS[f.dataset.form](f, e.submitter); } catch (err) { toast(err.message); }
+});
+window.addEventListener("hashchange", () => S.me && route());
+
+(async () => {
+  try { S.me = await api("/me", { quiet: true }); } catch (e) { return renderLogin(S.key ? e.message : ""); }
+  if (S.me.scope !== "full") return renderLogin("This key has ingest scope; sign in with a full-scope key.");
+  await loadProjects(); route();
+})();
+</script>
+</body>
+</html>

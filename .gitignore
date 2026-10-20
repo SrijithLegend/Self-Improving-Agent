@@ -6,3 +6,6 @@ __pycache__/
 trace.jsonl
 *.db
 *.db-*
+build/
+*.egg-info/
+sia-gate.json

@@ -1,0 +1,38 @@
+# Example GitHub Actions workflow: block a pull request that changes the prompt if it regresses your evaluation set.
+# Copy to .github/workflows/sia-gate.yml in YOUR application repo and adjust the paths and names.
+#
+# Assumes:
+#   - prompts/system_prompt.txt  is the prompt your app uses (the file this PR changes)
+#   - app.py has  def answer(input, prompt=None)  that runs your app with a given prompt
+#   - the dataset "regression" exists in your SIA project (verified examples)
+#   - repo secrets: SIA_API_KEY (full scope), SIA_BASE_URL, and whatever key your app needs
+name: SIA evaluation gate
+on:
+  pull_request:
+    paths: ["prompts/**", "app.py"]
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "sia-devtools @ git+https://github.com/SrijithLegend/Self-Improving-Agent" -r requirements.txt
+      - name: Evaluate the changed prompt against production's active version
+        env:
+          SIA_API_KEY: ${{ secrets.SIA_API_KEY }}
+          SIA_BASE_URL: ${{ secrets.SIA_BASE_URL }}
+          SIA_PROJECT: my-ai-agent
+          GENAI_API_KEY: ${{ secrets.GENAI_API_KEY }}  # used by your app, not by SIA
+        run: |
+          sia eval gate --dataset regression --target app:answer \
+            --scorer exact_match --candidate-file prompts/system_prompt.txt \
+            --min-score 0.85 --max-regressions 0 --json sia-gate.json
+        # exit 0 = pass, 1 = fail, 3 = inconclusive (too few examples or too noisy). All non-zero codes fail the job.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sia-gate
+          path: sia-gate.json

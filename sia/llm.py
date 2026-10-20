@@ -49,6 +49,7 @@ class LLM:
         self.provider, self.api_key = provider, api_key
         self.base_url = (base_url or OPENAI_COMPATIBLE.get(provider, "")).rstrip("/")
         self.calls = 0
+        self.last_usage = {}  # {"model", "prompt_tokens", "completion_tokens"} of the latest successful call
         self.http = httpx.Client(timeout=httpx.Timeout(90, connect=10))
 
     def text(self, system, prompt, temperature=0.7, as_json=False):
@@ -75,6 +76,8 @@ class LLM:
                 parts = data["candidates"][0]["content"]["parts"]
             except (KeyError, IndexError):
                 raise LLMError(f"Gemini returned no content: {str(data)[:300]}")
+            u = data.get("usageMetadata") or {}
+            self._usage(model, u.get("promptTokenCount"), u.get("candidatesTokenCount"))
             return "".join(p.get("text", "") for p in parts if not p.get("thought"))
 
         if self.provider == "anthropic":
@@ -82,6 +85,8 @@ class LLM:
                               {"x-api-key": self.api_key, "anthropic-version": "2023-06-01"},
                               {"model": model, "max_tokens": 4096, "temperature": temperature,
                                "system": system, "messages": [{"role": "user", "content": prompt}]})
+            u = data.get("usage") or {}
+            self._usage(model, u.get("input_tokens"), u.get("output_tokens"))
             return "".join(b.get("text", "") for b in data.get("content", []))
 
         data = self._post(f"{self.base_url}/chat/completions",
@@ -90,9 +95,15 @@ class LLM:
                            "messages": [{"role": "system", "content": system},
                                         {"role": "user", "content": prompt}]})
         try:
-            return data["choices"][0]["message"]["content"] or ""
+            content = data["choices"][0]["message"]["content"] or ""
         except (KeyError, IndexError):
             raise LLMError(f"Provider returned no content: {str(data)[:300]}")
+        u = data.get("usage") or {}
+        self._usage(model, u.get("prompt_tokens"), u.get("completion_tokens"))
+        return content
+
+    def _usage(self, model, prompt_tokens, completion_tokens):
+        self.last_usage = {"model": model, "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens}
 
     def json(self, system, prompt, temperature=0.2):
         raw = self.text(system + "\nRespond with a single JSON object only.", prompt, temperature, as_json=True)

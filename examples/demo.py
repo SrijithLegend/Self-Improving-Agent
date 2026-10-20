@@ -127,9 +127,9 @@ s = agent.study(rounds=3)
 print(f"\nstudied {s['studied']} self-generated questions: {[x['score'] for x in s['results']]}")
 
 # Eval on the hand-written examples only (user examples sort first); study's synthetic ones are unverified.
-imp = agent.improve(max_examples=len(EXAMPLES), trials=TRIALS)
+imp = agent.improve(max_examples=len(EXAMPLES), trials=TRIALS, activate=True)
 print(f"\nimprove (both sides use the learned lessons): {imp['old_score']:.2f} -> {imp['new_score']:.2f}  "
-      f"adopted={imp['adopted']}")
+      f"adopted={imp['adopted']} ({imp['verdict']}: {imp['reason']})")
 print("playbook:\n" + imp["playbook"])
 print("\nlessons:", *[f"  ({l['utility']}) {l['text']}" for l in store.lessons(record["id"])], sep="\n")
 print(f"\nstats: {store.stats(record['id'])}\nLLM calls: {llm.calls}")
