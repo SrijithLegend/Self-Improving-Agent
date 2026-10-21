@@ -113,3 +113,10 @@ Every place where the spec left room, and what was picked. Change any of these f
 - **Backup age** uses file modification time in `--backup-dir` (default `backups`), counting only `sia backup`'s
   file names.
 - **Placeholder prices** WARN when either paid price equals the built-in default (199900 / 799900 paise).
+
+## Task 11: Razorpay test plan
+
+- **Links, not values**: test cards and UPI ids are linked from Razorpay's docs, as the spec asks.
+- **Database checks** are Python one-liners (the Docker image has Python but no `sqlite3` binary).
+- **Abandoned-order cleanup** can be tested at once by back-dating the order and running `sia maintenance`.
+- **A refund round-trip** in test mode is added after the checklist, to compare against `web/refund.html`.
