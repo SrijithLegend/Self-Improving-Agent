@@ -109,3 +109,16 @@ def test_cli_admin_commands(tmp_path, monkeypatch, capsys):
     assert cli.main(["admin", "reject", rid]) == 4  # already decided
     monkeypatch.delenv("SIA_ADMIN_KEY")
     assert cli.main(["admin", "requests"]) == 4
+
+
+# --- Task 3: contact address ------------------------------------------------------------------------------------
+def test_site_config_without_contact_email(tmp_path, monkeypatch):
+    api, c = make(tmp_path, monkeypatch)
+    r = c.get("/site-config.json")
+    assert r.status_code == 200 and r.json() == {"contact_email": None}
+    assert r.headers["cache-control"] == "public, max-age=300"
+
+
+def test_site_config_with_contact_email(tmp_path, monkeypatch):
+    api, c = make(tmp_path, monkeypatch, SIA_CONTACT_EMAIL=" hello@example.com ")
+    assert c.get("/site-config.json").json() == {"contact_email": "hello@example.com"}

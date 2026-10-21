@@ -32,3 +32,11 @@ Every place where the spec left room, and what was picked. Change any of these f
 - **Admin listing** is also logged as a security event (`access_requests_listed`), since it reveals personal data.
 - **Form copy** asks people not to include their users' personal data in the use-case field.
 - **Notify me** (the old `mailto:` waitlist) is gone: the Request access form replaces it.
+
+## Task 3: contact address
+
+- **`data-contact` attributes** on `<body>` are gone: the address now comes only from `SIA_CONTACT_EMAIL` via
+  `/site-config.json`, so there's one place to set it.
+- **Fallback**: when the address is unset or the fetch fails, links keep the GitHub-issues `href` and their written
+  text (for example "us"), instead of the old replacement text.
+- **Grievance contact** is a paragraph under "Your rights" in the privacy policy, with the same 30-day answer time.

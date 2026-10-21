@@ -453,6 +453,13 @@ def health():
     return {"ok": True, "db": True, "local_mode": LOCAL_MODE}
 
 
+@app.get("/site-config.json", include_in_schema=False)
+def site_config():
+    """Public settings the static pages read once (web/site.js): the contact address, or null."""
+    return JSONResponse({"contact_email": os.getenv("SIA_CONTACT_EMAIL", "").strip() or None},
+                        headers={"Cache-Control": "public, max-age=300"})
+
+
 @app.post("/v1/tenants", status_code=201)
 def create_tenant(body: TenantIn, request: Request, x_admin_key: str = Header(default="")):
     require_admin(request, x_admin_key)
