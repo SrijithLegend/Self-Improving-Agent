@@ -13,7 +13,7 @@ Baseline: `python -m pytest` gave **15 passed**, all offline with a scripted fak
 | SDK | None | Everything in sections 4-11 of the spec. |
 | Evaluation | LLM-graded only, eval set chosen with `ORDER BY random()` each time | No deterministic scorers, no pinned dataset versions, no stored per-example results, no record of scorer or config. |
 | Dashboard | None | |
-| `phase1/` | An earlier prototype (needs `google-genai`, not in requirements) | Not part of the product. Left untouched. |
+| `phase1/` | An earlier prototype (needs `google-genai`, not in requirements) | Not part of the product. Removed before launch; kept at the git tag `archive/phase1`. |
 
 The engine itself (critique loop, lessons, paired comparison) was sound and is kept. `significant_gain` was valid
 and is now implemented on top of the shared `compare_scores`.
@@ -49,16 +49,16 @@ rules are tested, but these must be addressed before hosting paying customers:
   Postgres and a shared limiter.
 - Request-size limiting relies on `Content-Length`; chunked uploads without it are not capped before parsing.
 - Run export loads up to 100,000 rows into memory.
-- ~~No backups or on-call runbook.~~ Done (Task 6): `sia backup` / `sia restore`, a Litestream example and
+- ~~No backups or on-call runbook.~~ Done (Task 6, 4c596ad): `sia backup` / `sia restore`, a Litestream example and
   `docs/RUNBOOK.md`. Still no metrics or alerting. Logs go to stdout as JSON lines.
-- ~~No retention job.~~ Done (Task 9): `sia maintenance` applies run retention to idle projects too, and deletes
+- ~~No retention job.~~ Done (Task 9, 7edabce): `sia maintenance` applies run retention to idle projects too, and deletes
   old rejected access requests and unpaid orders. Schedule it daily (`docs/RUNBOOK.md`).
 - `sia/agent.py` managed-agent `study` and `improve` still run synchronously inside the request.
 
 **Product**
 - Prices and plan limits are hypotheses. Razorpay is integrated (orders, checkout verification, signed webhooks,
   30-day passes), tested against a fake Razorpay only; it has not yet been run against a real Razorpay account.
-  No recurring subscriptions or GST invoicing. ~~No refund policy.~~ Done (Task 8): `web/refund.html`, the same
+  No recurring subscriptions or GST invoicing. ~~No refund policy.~~ Done (Task 8, 49796f6): `web/refund.html`, the same
   wording as terms section 7; refunds are issued by hand from the Razorpay dashboard.
 - Only a synchronous Python SDK. No async support, no framework adapters (LangChain, LlamaIndex, ...).
 - The gate can only protect behaviour that the developer's dataset and target function exercise.

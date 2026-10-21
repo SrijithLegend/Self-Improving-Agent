@@ -120,3 +120,12 @@ Every place where the spec left room, and what was picked. Change any of these f
 - **Database checks** are Python one-liners (the Docker image has Python but no `sqlite3` binary).
 - **Abandoned-order cleanup** can be tested at once by back-dating the order and running `sia maintenance`.
 - **A refund round-trip** in test mode is added after the checklist, to compare against `web/refund.html`.
+
+## Task 12: cleanup
+
+- **`archive/phase1`** is pushed to GitHub, so the prototype stays recoverable after `git rm -r phase1/`.
+- **AUDIT §3** marks only the gaps it listed that these tasks closed (backups and runbook, retention job, refund
+  policy), each with its commit. The access-request flow, usage cap, HEAD routes and `sia doctor` weren't listed
+  there, so they're described in the README instead.
+- **`.gitignore`** got `backups/` in Task 6, when `sia backup` started writing there by default.
+- **`SPEC.md`** still names `phase1/` in its original file list; it's the historical spec and was left as written.

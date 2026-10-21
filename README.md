@@ -4,11 +4,13 @@
 
 **Turn AI-agent failures into tested improvements, with evidence that a change helps before it reaches production.**
 
+**Status: public beta.** What is and isn't production-ready: [`docs/AUDIT.md`](docs/AUDIT.md#3-production-readiness-not-yet).
+
 Capture runs from your existing Python app → turn verified corrections into test cases →
 let an LLM propose a better prompt → measure both versions on the same dataset → release only what the numbers support.
 
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-50%20passing-1f7a4d)
+[![tests](https://github.com/SrijithLegend/Self-Improving-Agent/actions/workflows/tests.yml/badge.svg)](https://github.com/SrijithLegend/Self-Improving-Agent/actions/workflows/tests.yml)
 ![Local first](https://img.shields.io/badge/local%20mode-no%20account%20needed-555)
 ![FastAPI](https://img.shields.io/badge/hosted%20API-FastAPI-009688?logo=fastapi&logoColor=white)
 
