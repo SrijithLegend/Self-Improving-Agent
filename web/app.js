@@ -226,6 +226,26 @@
     });
   });
 
+  // --- pricing: limits from PLANS and prices from the server (/v1/plans); the static text stays if it fails ---
+  fetch("/v1/plans").then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+    if (!d || !d.plans) return;
+    var num = function (n) { return Number(n).toLocaleString("en-US"); };  // 250,000, as in the terms
+    var money;
+    try { money = new Intl.NumberFormat("en-IN", { style: "currency", currency: d.currency, maximumFractionDigits: 0 }); }
+    catch (e) { money = { format: function (v) { return d.currency + " " + num(v); } }; }
+    $$("#plans .plan").forEach(function (card) {
+      var l = d.plans[card.getAttribute("data-plan")];
+      if (!l) return;
+      var set = function (f, text) { var el = $('[data-f="' + f + '"]', card); if (el) el.textContent = text; };
+      set("price", money.format(l.price / 100));
+      set("projects", num(l.projects) + (l.projects === 1 ? " project" : " projects"));
+      set("runs", num(l.runs_per_month) + " runs a month" + (l.overage && l.hard_cap
+        ? ", accepted up to " + num(l.runs_per_month * l.hard_cap) : ", then refused"));
+      set("examples", num(l.examples_per_dataset) + " examples per dataset");
+      set("retention", l.retention_days + "-day run history");
+    });
+  }, function () {});
+
   // --- request access: posts to /v1/access-requests (same origin, no third party) -----------------
   var form = $("#access-form"), status = $("#access-status"), send = $(".access-send", form);
   function fieldError(input, msg) {

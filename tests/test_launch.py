@@ -263,3 +263,25 @@ def test_backup_of_a_missing_or_corrupt_database_fails(tmp_path):
     bad.write_bytes(b"this is not a database" * 100)
     assert cli.main(["backup", "--db", str(bad), "--dir", str(tmp_path / "b")]) == 4
     assert not list((tmp_path / "b").glob("sia-*.db"))
+
+
+# --- Task 7: pricing from one source of truth -------------------------------------------------------------------
+def test_plans_endpoint_matches_plans_and_env_prices(tmp_path, monkeypatch):
+    api, c = make(tmp_path, monkeypatch, SIA_PRICE_PRO_PAISE="149900", SIA_PRICE_TEAM_PAISE="599900")
+    r = c.get("/v1/plans")  # no auth
+    assert r.status_code == 200
+    d = r.json()
+    assert d["beta"] is True and d["currency"] == "INR" and d["period_days"] == 30
+    assert set(d["plans"]) == set(api.PLANS)
+    for name, lim in api.PLANS.items():
+        assert {k: v for k, v in d["plans"][name].items() if k != "price"} == lim
+    assert (d["plans"]["free"]["price"], d["plans"]["pro"]["price"], d["plans"]["team"]["price"]) == (0, 149900, 599900)
+
+
+def test_landing_page_static_pricing_matches_plans(tmp_path, monkeypatch):
+    api, c = make(tmp_path, monkeypatch)
+    html = c.get("/").text
+    for name, lim in api.PLANS.items():  # the no-JS fallback text must not drift from PLANS
+        assert f'data-plan="{name}"' in html
+        assert f"{lim['runs_per_month']:,} runs a month" in html and f"{lim['retention_days']}-day run history" in html
+    assert "Most popular" not in html and "per 30 days" in html and "beta prices" in html

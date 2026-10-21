@@ -68,3 +68,12 @@ Every place where the spec left room, and what was picked. Change any of these f
 - **Two backups in the same second**: the second one fails rather than overwrite the first.
 - **Leaked-key revocation** for an unreachable customer is a Python one-liner in the runbook rather than a new CLI
   command; the customer can already rotate their own key.
+
+## Task 7: pricing
+
+- **Four cards in the existing two-column grid** (self-host, Free, Pro, Team), no badge, no highlighted card.
+- **Static fallback** is the full set of limits written into the HTML (a test checks it against `PLANS`), with
+  "Price at checkout" in place of the paid prices, since those come from env vars that differ per deployment.
+- **Numbers use `en-US` grouping** (250,000) to match the terms and README; prices use `en-IN` currency format.
+- **"Beta pricing"** appears as the paid cards' label and in the sentence under the heading.
+- **`/v1/plans` keeps the API's `no-store` cache header** like every `/v1` route; it's one small request per visit.

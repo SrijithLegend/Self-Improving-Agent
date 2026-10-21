@@ -257,6 +257,10 @@ section > p { max-width: 64ch; color: var(--ink-2); }
 .card { border: 1px solid var(--line); padding: 24px; background: var(--surface); min-width: 0; }
 .card h3 { font-size: var(--t-title); line-height: 1.1; margin: 12px 0 10px; }
 .card p { color: var(--ink-2); margin: 0; }
+.plan .price { margin: 0 0 12px; color: var(--ink); font: 500 var(--t-body) var(--f-mono); }
+.plan .per { color: var(--muted); font-size: var(--t-small); }
+.limits { list-style: none; margin: 16px 0 0; padding: 16px 0 0; border-top: 1px solid var(--line); display: grid; gap: 6px;
+  font: 400 var(--t-small) var(--f-mono); color: var(--ink-2); }
 .step { font: 500 var(--t-small) var(--f-mono); color: var(--accent); letter-spacing: .14em; text-transform: uppercase; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 20px 0 0; padding: 0; }
 .chips li { padding: 6px 12px; border: 1px solid var(--line); font: 400 var(--t-small) var(--f-mono); color: var(--ink-2); background: var(--paper); }

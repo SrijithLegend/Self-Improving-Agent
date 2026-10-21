@@ -30,7 +30,7 @@ from . import billing
 from . import security as sec
 from .agent import Agent
 from .llm import LLM, LLMError
-from .store import PLANS, Store
+from .store import PAID_PERIOD_DAYS, PLANS, Store
 
 app = FastAPI(title="SIA DevTools API", version="0.1.0",
               description="Turn AI-agent failures into tested improvements: capture runs, verify feedback into "
@@ -597,6 +597,14 @@ async def razorpay_webhook(request: Request):
     if event.get("event") in ("order.paid", "payment.captured") and pay and entity.get("status") == "captured"             and entity.get("amount") == pay["amount"] and entity.get("currency") == pay["currency"]:
         store.mark_paid(order_id, entity.get("id"))
     return {"ok": True}  # 2xx for events we ignore too, so Razorpay doesn't retry them
+
+
+@app.get("/v1/plans")
+def plans():
+    """Public: plan limits and prices (smallest currency unit, per 30-day period), for the landing page."""
+    cfg = billing.settings()
+    return {"beta": True, "currency": cfg["currency"], "period_days": PAID_PERIOD_DAYS,
+            "plans": {name: {**lim, "price": cfg["prices"].get(name, 0)} for name, lim in PLANS.items()}}
 
 
 @app.get("/v1/me")

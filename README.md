@@ -362,6 +362,7 @@ All under `/v1`, `Authorization: Bearer <key>`. Lists take `limit`/`offset` and 
 | `POST/GET /projects/{p}/versions`, `GET /versions/active?name=` | full / any | candidates; the active version is readable with ingest keys |
 | `POST /versions/{name}/{v}/approve`, `/reject`, `/activate` | full | release steps |
 | `POST /tenants`, `POST /admin/orgs/{id}/plan` | admin key | create organizations, change plans (payment webhook boundary) |
+| `GET /plans` | none | plan limits and prices (smallest currency unit, per 30 days), `beta: true`; the landing page renders it |
 | `POST /access-requests` | none | ask for hosted access (rate-limited, always `202`) |
 | `GET /admin/access-requests?status=`, `POST /admin/access-requests/{id}/approve`, `/reject` | admin key | review the queue; approve creates the organization and returns its key once |
 | `GET` or `HEAD /health` | none | liveness and database check (`HEAD` for uptime monitors; `/`, `/dashboard` and the legal pages answer `HEAD` too) |

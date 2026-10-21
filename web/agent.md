@@ -108,7 +108,10 @@ One run of `examples/devtools_demo.py` on the free `gemini-flash-latest` model, 
 ## Pricing
 
 - **Self-host: free.** Run it on your own machine or server, with your own model keys. Your data stays in your database. The source is under the [Functional Source License](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/LICENSE.md) (FSL-1.1-ALv2): free to use, modify and self-host, but not to resell as a competing service. Each release becomes Apache 2.0 two years after it ships. `docker build -t sia . && docker run -p 8000:8000 -v sia-data:/data --env-file .env sia`
-- **Hosted: public beta, by request.**
+- **Hosted: public beta, by request** (the Request access form, `POST /v1/access-requests`). Beta prices, 30 days at a time, no auto-renewal, overage not billed during the beta. Current limits and prices as JSON: `GET /v1/plans`.
+  - Free: 1 project, 10,000 runs a month, 200 examples per dataset, 14-day run history.
+  - Pro: 10 projects, 250,000 runs a month (accepted up to 500,000), 5,000 examples per dataset, 90-day run history.
+  - Team: 100 projects, 2,000,000 runs a month (accepted up to 4,000,000), 50,000 examples per dataset, 365-day run history.
 
 Privacy policy: `/privacy` · Terms of service: `/terms`
 
