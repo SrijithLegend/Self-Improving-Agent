@@ -218,7 +218,7 @@ h1 { font-size: var(--t-display); line-height: 1.08; letter-spacing: -.02em; mar
 .providers svg { width: 28px; height: 28px; fill: var(--ink-2); display: block; }
 .chip-name { display: inline-flex; align-items: center; height: 28px; padding: 0 8px; border: 1px solid var(--line); font: 500 var(--t-small) var(--f-mono); color: var(--ink-2); }
 
-/* hero: a labeled diagram of the three loops. The amber token is the page's only animation. */
+/* hero: a labeled diagram of the five-step loop. The amber token is the page's only animation. */
 .hero { margin: 64px 0 0; }
 .hero-frame { --bracket: var(--signal); background: var(--hero-bg); padding: 16px; }
 .loops { display: block; width: 100%; height: auto; font-family: var(--f-mono); }
@@ -226,12 +226,11 @@ h1 { font-size: var(--t-display); line-height: 1.08; letter-spacing: -.02em; mar
 .loops .ring.lesson { stroke: var(--loop-amber); stroke-dasharray: 2 10; stroke-linecap: square; }
 .loops .node { fill: var(--hero-bg); stroke: var(--loop-teal); stroke-width: 2; }
 .loops .node.amber { stroke: var(--loop-amber); }
-.loops .core { fill: var(--loop-amber); }
 .loops .token { fill: var(--loop-amber); }
 .loops text { fill: var(--on-dark); font-size: 22px; }
 .loops .ring-name { fill: var(--loop-teal); letter-spacing: .14em; text-transform: uppercase; }
 .loops .ring-name.amber { fill: var(--loop-amber); }
-.loops .core-label { fill: var(--code-muted); letter-spacing: .14em; text-transform: uppercase; }
+.loops .sub { fill: var(--code-muted); }
 .hero figcaption { margin-top: 14px; color: var(--muted); font-size: var(--t-small); max-width: 72ch; }
 
 /* --- sections ------------------------------------------------------------- */
@@ -241,7 +240,7 @@ section > p { max-width: 64ch; color: var(--ink-2); }
 
 .cards { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
 
-/* How it learns: three steps in order, each with the real response it produced */
+/* How it works: the steps in order, each with the real result it produced */
 .steps { list-style: none; margin: 8px 0 0; padding: 0; }
 .steps > li { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 0 16px; padding: 24px 0; border-bottom: 1px solid var(--line); }
 .steps > li:first-child { padding-top: 8px; }

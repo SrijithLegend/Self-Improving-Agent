@@ -112,40 +112,39 @@
 
   // --- setup prompt (3 variants) -------------------------------------------------------------------
   var BASE_PROMPT = [
-    "Integrate the SIA self-improving agent API into this project.",
-    "- Base URL: read SIA_URL from env (default http://localhost:8000). Auth header: Authorization: Bearer $SIA_KEY.",
-    "- LLM key: send X-LLM-Provider and X-LLM-Key headers (default provider gemini). Never log or store the LLM key.",
-    "- Flow: POST /v1/agents to create one agent; POST /v1/agents/{id}/knowledge for docs;",
-    "  POST /v1/agents/{id}/run with {\"task\": ...}; POST /v1/agents/{id}/feedback with {\"episode_id\", \"rating\", \"correction\"}.",
-    "- Show the user the `answer`; keep `episode_id` so the user can rate it.",
-    "- Put the client in one module with typed request/response models and handle 400/401/404/502."
+    "Add SIA DevTools to this project so prompt changes are tested before they ship.",
+    "- Install: pip install \"sia-devtools[server] @ git+https://github.com/SrijithLegend/Self-Improving-Agent\"",
+    "- Create one client: sia = SIAClient(project=\"<this app>\"). Local mode needs no key; for the hosted API read",
+    "  SIA_API_KEY and SIA_BASE_URL from env and use an ingest-scope key in production. Never log either.",
+    "- Decorate the function that calls the model with @sia.trace (it records input, output, latency, errors).",
+    "- Read the system prompt with sia.get_prompt(default=<current prompt text>) and pass it to the model.",
+    "- Make the target testable as def answer(input, prompt=None).",
+    "- Create a dataset of 10+ real inputs with expected outputs; mark must-not-break cases critical=True.",
+    "- Write deterministic scorers with @scorer(\"name\") and run sia.evaluate(dataset, answer, [scorers]).",
+    "- Add a CI step: sia eval gate --dataset <name> --target <module>:answer --candidate-file <prompt file>",
+    "  --max-regressions 0 (exit 0 pass, 1 fail, 3 inconclusive)."
   ].join("\n");
   var PROMPTS = {
     claude: BASE_PROMPT,
     // Cursor: the same instructions as a project rule (save as .cursor/rules/sia.mdc, or paste into Agent chat)
-    cursor: ["---", "description: How this project talks to the SIA self-improving agent API", "alwaysApply: true", "---", "", BASE_PROMPT].join("\n"),
-    curl: [
-      "# SIA in 6 calls. Set SIA_KEY (your SIA key) and LLM_KEY (your model provider key) first.",
-      "# helper: POSTs when -d is given, GETs otherwise",
-      "sia() { curl -s -H \"Authorization: Bearer $SIA_KEY\" -H \"X-LLM-Key: $LLM_KEY\" -H \"Content-Type: application/json\" \"localhost:8000$@\"; }",
+    cursor: ["---", "description: How this project tests prompt changes with SIA DevTools", "alwaysApply: true", "---", "", BASE_PROMPT].join("\n"),
+    shell: [
+      "# SIA DevTools from the shell. Local mode: no account, writes to sia_local.db.",
+      "pip install \"sia-devtools[server] @ git+https://github.com/SrijithLegend/Self-Improving-Agent\"",
       "",
-      "# 1. create an agent",
-      "sia /v1/agents -d '{\"name\":\"tax-bot\",\"domain\":\"Indian personal income tax\",\"instructions\":\"Cite the section of the Act. Show calculations.\",\"rubric\":\"Correct section cited; arithmetic right; flags when a CA is needed.\"}'",
-      "# 2. teach it: a document and an example with the right answer",
-      "sia /v1/agents/$ID/knowledge -d '{\"title\":\"Section 80C\",\"content\":\"...\"}'",
-      "sia /v1/agents/$ID/examples  -d '{\"input\":\"...\",\"expected\":\"...\"}'",
-      "# 3. ask it something",
-      "sia /v1/agents/$ID/run -d '{\"task\":\"Can I claim my PPF under 80C?\"}'",
-      "# 4. correct it when it's wrong",
-      "sia /v1/agents/$ID/feedback -d '{\"episode_id\":\"...\",\"rating\":2,\"correction\":\"...\"}'",
-      "# 5. let it study, then improve",
-      "sia /v1/agents/$ID/study   -d '{\"rounds\":5}'",
-      "sia /v1/agents/$ID/improve -d '{\"trials\":2}'",
-      "# 6. inspect it",
-      "sia /v1/agents/$ID"
+      "# the whole loop with fictional data (scripted model, no key needed)",
+      "python examples/devtools_demo.py --offline",
+      "",
+      "# your runs, datasets and evaluations",
+      "sia dashboard",
+      "",
+      "# gate a prompt change against the active version",
+      "sia eval gate --dataset regression --target app:answer --scorer exact_match \\",
+      "  --candidate-file prompts/system_prompt.txt --min-score 0.85 --max-regressions 0",
+      "echo $?   # 0 pass, 1 fail, 3 inconclusive"
     ].join("\n")
   };
-  var NAMES = { claude: "Claude Code", cursor: "Cursor", curl: "curl" };
+  var NAMES = { claude: "Claude Code", cursor: "Cursor", shell: "Shell" };
   var variant = "claude";
   var copyBtn = $("[data-copy-prompt]"), longLabel = $(".setup-label .long"), shortLabel = $(".setup-label .short");
   var more = $(".setup-more"), menu = $("#setup-menu"), menuItems = $$("button", menu);
@@ -322,7 +321,7 @@
     if (!mobile.matches) closeDrawer(false);
   });
 
-  // --- hero diagram: the page's one animation. A lesson token travels through the three loops. -------
+  // --- hero diagram: the page's one animation. A failed run travels through the five steps. ---------
   var loops = $("#loops");
   if (loops) heroLoops(loops);
 
@@ -343,7 +342,7 @@
       var should = visible && !document.hidden && !reduced.matches;
       if (should && !running) { running = true; start = 0; raf = requestAnimationFrame(tick); }
       else if (!should && running) { running = false; cancelAnimationFrame(raf); }
-      if (reduced.matches) place(0.33);  // still: the token rests between loop 1 and loop 2
+      if (reduced.matches) place(0.375);  // still: the token rests between feedback and dataset
       svg.setAttribute("data-running", running ? "1" : "0");
     }
     if ("IntersectionObserver" in window) new IntersectionObserver(function (en) { visible = en[0].isIntersecting; update(); }).observe(svg);

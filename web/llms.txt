@@ -1,22 +1,33 @@
-# SIA: Self-Improving Agent API
+# SIA DevTools
 
-> A REST API for agents that learn a domain from answers, corrections and documents. What they learn is kept as readable text (lessons, a playbook, documents), not model weights. Bring your own model key; self-host with Docker.
+> Records an AI app's runs, turns reviewer-verified corrections into versioned test cases, and compares prompt versions on the same examples so a change ships only with a measured win. Local-first (SQLite, no account); optional hosted API. SIA never retrains a model and never edits code; it versions prompts.
 
-Base URL: http://localhost:8000 when self-hosted (set SIA_URL); every endpoint below is under /v1.
-Auth: Authorization: Bearer <SIA key>. Model calls also take X-LLM-Provider (default gemini; also anthropic, openai, groq, ollama, openrouter, together, mistral, deepseek), X-LLM-Key and optional X-LLM-Model. The model key is used per request and never stored.
+Python SDK and CLI: pip install "sia-devtools[server] @ git+https://github.com/SrijithLegend/Self-Improving-Agent"
+Local mode: SIAClient(project="...") with no key writes to sia_local.db. Hosted mode: SIAClient(api_key=..., base_url=...).
+Hosted auth: Authorization: Bearer <SIA key>. Keys have scope "full" or "ingest" (ingest: send runs and feedback, read the active prompt).
 
-## Core endpoints
+## Core SDK calls
 
-- POST /v1/agents: create an agent {name, domain, instructions, rubric}
-- POST /v1/agents/{id}/knowledge: add a document {title, content}
-- POST /v1/agents/{id}/run: answer a task {task, learn?} -> {answer, score, episode_id, ...}
-- POST /v1/agents/{id}/feedback: rate or correct an answer {episode_id, rating 1-5, correction?}
-- POST /v1/agents/{id}/study: practise on generated questions {rounds}
-- POST /v1/agents/{id}/improve: propose a new playbook, adopted only with a measured win {trials, activate?}
+- @sia.trace / sia.start_run(name, input): record a run (input, output, latency, errors, nested steps)
+- sia.feedback(run, rating, correction=...): pending feedback; sia.review_feedback(id, "verified", dataset=...) turns it into a test case
+- sia.create_dataset(name).add_example(input, expected_output, critical=...): versioned datasets
+- sia.evaluate(dataset, target, scorers): score a target function on a dataset
+- sia.compare(baseline, candidate): paired verdict improved / no_improvement / inconclusive / regressed
+- sia.create_version / approve / activate / get_prompt: versioned prompts with an explicit release step
+
+## CLI
+
+- sia eval gate --dataset D --target module:fn --candidate-file F: CI gate, exit 0 pass, 1 fail, 3 inconclusive
+- sia improve, sia versions, sia runs, sia feedback, sia dashboard, sia serve
+
+## HTTP API (hosted)
+
+- POST /v1/projects/{p}/runs, POST /v1/projects/{p}/runs/{id}/feedback, /datasets, /evaluations, /comparisons, /versions
+- GET /v1/projects/{p}/versions/active: the prompt production should use
 
 ## Links
 
 - [Interactive API docs](/docs): the full OpenAPI reference
-- [This site as markdown](/agent.md): mission, how it learns, API example, results
+- [This site as markdown](/agent.md): mission, how it works, quickstart, CI gate, results
 - [Source](https://github.com/SrijithLegend/Self-Improving-Agent) (license: FSL-1.1-ALv2, see LICENSE.md)
 - [Privacy policy](/privacy) and [terms of service](/terms)
