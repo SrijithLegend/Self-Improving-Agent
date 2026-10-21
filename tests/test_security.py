@@ -112,6 +112,9 @@ def test_security_headers(tmp_path, monkeypatch):
     assert "content-security-policy" not in c.get("/docs").headers  # Swagger UI loads its own scripts
     assert c.get("/health", headers={"X-Request-ID": "abc-123"}).headers["x-request-id"] == "abc-123"
     assert c.get("/health", headers={"X-Request-ID": "<script>"}).headers["x-request-id"] != "<script>"
+    # a revalidated page (304) must not pick up the API policy, or browsers apply it to the cached page
+    again = c.get("/", headers={"If-None-Match": page.headers["etag"]})
+    assert again.status_code == 304 and "content-security-policy" not in again.headers
     https = TestClient(api.app, base_url="https://testserver")
     assert https.get("/health").headers["strict-transport-security"].startswith("max-age=")
 

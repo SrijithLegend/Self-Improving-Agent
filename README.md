@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🧠 SIA DevTools
+# SIA DevTools
 
 **Turn AI-agent failures into tested improvements, with evidence that a change helps before it reaches production.**
 
@@ -18,33 +18,33 @@ let an LLM propose a better prompt → measure both versions on the same dataset
 
 ---
 
-## 🤔 Why
+## Why
 
 Changing a prompt is easy. Knowing it didn't break something else is hard. Most teams eyeball a few answers and
 ship. SIA gives you a repeatable loop instead:
 
 ```mermaid
 flowchart LR
-    A[🏃 Your app runs<br/>SIA records it] --> B[👎 A user or reviewer<br/>flags a bad answer]
-    B --> C{🧐 Reviewer<br/>verifies?}
-    C -- yes --> D[🧪 It becomes a<br/>dataset example]
-    C -- no --> X[🗑 Rejected,<br/>never used]
-    D --> E[💡 LLM proposes a<br/>candidate prompt]
-    E --> F[📊 Baseline vs candidate<br/>on the same examples]
+    A[Your app runs<br/>SIA records it] --> B[A user or reviewer<br/>flags a bad answer]
+    B --> C{Reviewer<br/>verifies?}
+    C -- yes --> D[It becomes a<br/>dataset example]
+    C -- no --> X[Rejected,<br/>never used]
+    D --> E[LLM proposes a<br/>candidate prompt]
+    E --> F[Baseline vs candidate<br/>on the same examples]
     F --> G{Verdict}
-    G -- improved --> H[✅ Approve → activate<br/>roll back any time]
-    G -- regressed / inconclusive --> I[⛔ Stays a candidate]
+    G -- improved --> H[Approve → activate<br/>roll back any time]
+    G -- regressed / inconclusive --> I[Stays a candidate]
 ```
 
 What makes it different from a tracing tool:
 
 | | |
 |---|---|
-| 🧾 **Feedback becomes regression tests** | Corrections are *pending* until a reviewer verifies them, then they join a versioned dataset with a link back to the run. |
-| 💡 **Improvements come from evidence** | Candidates are drafted from failed eval cases, verified feedback and recurring errors. Unverified feedback is never used. |
-| 📊 **Paired, noise-aware decisions** | Same examples, same scorers, same dataset version. Verdicts are `improved`, `no_improvement`, `inconclusive` or `regressed`, always with a reason. |
-| 🚦 **Explicit releases** | Generate → evaluate → approve → activate are separate steps. Critical examples can never regress. Every decision is in the audit log. |
-| 🏠 **Local first** | Everything works offline against a SQLite file. The hosted API is optional. |
+| **Feedback becomes regression tests** | Corrections are *pending* until a reviewer verifies them, then they join a versioned dataset with a link back to the run. |
+| **Improvements come from evidence** | Candidates are drafted from failed eval cases, verified feedback and recurring errors. Unverified feedback is never used. |
+| **Paired, noise-aware decisions** | Same examples, same scorers, same dataset version. Verdicts are `improved`, `no_improvement`, `inconclusive` or `regressed`, always with a reason. |
+| **Explicit releases** | Generate → evaluate → approve → activate are separate steps. Critical examples can never regress. Every decision is in the audit log. |
+| **Local first** | Everything works offline against a SQLite file. The hosted API is optional. |
 
 > [!NOTE]
 > SIA never retrains a model. It improves your app's **instructions** (prompts, playbooks, output-format rules) and
@@ -52,7 +52,7 @@ What makes it different from a tracing tool:
 
 ---
 
-## 🚀 Quickstart (5 minutes)
+## Quickstart (5 minutes)
 
 **Install** (Python 3.11+):
 
@@ -121,7 +121,7 @@ python examples/devtools_demo.py             # real Gemini model (free key from 
 
 ---
 
-## 🔁 The workflow
+## The workflow
 
 ### Version your prompt and read it at runtime
 
@@ -205,7 +205,7 @@ prompt version (or prompt SHA-256) and your metadata (for example the model).
 
 ---
 
-## 🚦 CI regression gate
+## CI regression gate
 
 ```bash
 sia eval gate --dataset regression --target app:answer --scorer exact_match \
@@ -254,7 +254,7 @@ Common options: `--project` (`SIA_PROJECT`), `--api-key` (`SIA_API_KEY`), `--bas
 
 ---
 
-## 📊 Demo results (real model)
+## Demo results (real model)
 
 `examples/devtools_demo.py` on the free `gemini-flash-latest` model, 2026-10-20, fictional company and data. The app
 is a returns assistant whose replies are parsed by code, so each must start with `DECISION: YES` or `DECISION: NO`.
@@ -279,7 +279,7 @@ scripted model whose behaviour is hard-coded, so its numbers show the mechanics 
 
 ---
 
-## 🖥 Dashboard
+## Dashboard
 
 Served by the API at `/dashboard` (`sia serve`) or for local mode with `sia dashboard`. It reads only real stored data.
 
@@ -298,7 +298,7 @@ Evaluations run your code, so they start from your machine or CI, not from the b
 
 ---
 
-## ☁️ Hosted API
+## Hosted API
 
 ```bash
 cp .env.example .env            # set SIA_ADMIN_KEY
@@ -370,7 +370,7 @@ history) showed the loop working on a free model; learned lessons helped in one 
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -412,7 +412,7 @@ with no expiry via `POST /v1/admin/orgs/{id}/plan` or `sia set-plan`.
 
 ---
 
-## 💳 Payments (Razorpay)
+## Payments (Razorpay)
 
 Customers upgrade from **Plans & billing** in the dashboard. Each payment buys **30 days** of Pro or Team; paying
 again before it ends adds 30 more days. When a paid period runs out the organization drops back to Free.
@@ -458,7 +458,7 @@ Billing endpoints: `GET /v1/billing`, `POST /v1/billing/orders`, `POST /v1/billi
 
 ---
 
-## 🔒 Security and data handling
+## Security and data handling
 
 - **Isolation:** every record is scoped to an organization and project, and every query checks ownership. Another
   organization's ids return `404`. Tests prove this for projects, runs, feedback, datasets, evaluations and versions.
@@ -487,7 +487,7 @@ trusted proxies, Host allowlist, edge rate limits) and what changes when you sca
 
 ---
 
-## ⚠️ Known limitations
+## Known limitations
 
 Not production-ready yet. The full assessment is in [docs/AUDIT.md](docs/AUDIT.md). In short:
 
@@ -501,7 +501,7 @@ Not production-ready yet. The full assessment is in [docs/AUDIT.md](docs/AUDIT.m
 
 ---
 
-## 📁 Project layout
+## Project layout
 
 ```
 sia_devtools/          # the SDK and CLI (pip package "sia-devtools", command "sia")
@@ -526,16 +526,16 @@ LICENSE.md                  # FSL-1.1-ALv2
 docs/AUDIT.md               # audit, what was built, readiness assessment
 ```
 
-## 📜 License
+## License
 
 SIA is under the **Functional Source License, version 1.1, with an Apache 2.0 future license**
 ([FSL-1.1-ALv2](LICENSE.md)).
 
-- ✅ **You can** use it, change it and self-host it for free, inside your company or for clients, for research and
+- **You can** use it, change it and self-host it for free, inside your company or for clients, for research and
   for teaching.
-- 🚫 **You can't** offer it, or something substantially similar built from it, to others as a commercial product or
+- **You can't** offer it, or something substantially similar built from it, to others as a commercial product or
   hosted service that competes with SIA.
-- ⏳ **Two years after each release**, that release is also available under the Apache License 2.0, with no
+- **Two years after each release**, that release is also available under the Apache License 2.0, with no
   restrictions.
 
 Third-party packages keep their own licenses (all MIT, BSD or Apache 2.0). Provider names and logos on the landing

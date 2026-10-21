@@ -19,10 +19,14 @@ links will 404.
 |---|---|
 | `index.html` | the page (Human view) |
 | `styles.css` | tokens, layout, components, light/dark themes |
-| `app.js` | theme, Human/Agent toggle, scroll-spy, copy prompt, code tabs, hero canvas, mobile drawer |
+| `app.js` | Human/Agent toggle, scroll-spy, copy prompt, code tabs, hero diagram, mobile drawer |
+| `site.js` | shared by every page: the saved theme (before first paint) and the contact links |
+| `privacy.html`, `terms.html` | served at `/privacy` and `/terms`; linked from every footer, the signup field and the dashboard |
+| `404.html` | served by the mount for any unknown page (unknown `/v1/...` paths still get JSON) |
 | `agent.md` | the same content as markdown (Agent view and a direct link) |
 | `llms.txt` | short machine-readable summary for coding agents |
 | `assets/logo.svg` | the loop mark; also the favicon |
+| `assets/og.png` | the 1200×630 link preview image |
 
 Weight without fonts is about 75 KB. No third-party scripts and no analytics; the only outside request is Google
 Fonts.
@@ -33,11 +37,10 @@ Fonts.
   `/agent.md` and `/llms.txt` still answer.
 - Lighthouse 12.6 (desktop, mobile, and mobile in dark mode): accessibility 100, best practices 100, SEO 100.
 - In Chrome: the toggle by mouse and arrow keys, which survives a reload and sets `?view=agent`; the scroll-spy
-  while scrolling, when clicking and at the page bottom; all three prompt variants copied, with COPIED ✓ and a
-  live-region message; the hero pauses off-screen and draws one still frame under reduced motion; light, dark and
+  while scrolling, when clicking and at the page bottom; all three prompt variants copied, with COPIED and a
+  live-region message; the hero token pauses off-screen and rests in place under reduced motion; light, dark and
   system themes; at 360 px no horizontal scroll, the drawer opens, traps focus and closes on Esc, the backdrop or a
   link, and the buttons stack.
-- Hero cost: about 3.7 ms per frame for 900 particles at 2× pixel ratio, well inside a 60 fps budget.
 
 ## Default choices made
 
@@ -63,9 +66,12 @@ Fonts.
   is a mono text chip.
 - **Cursor prompt variant** is the Claude Code prompt wrapped as a Cursor project rule (frontmatter, so it can be
   saved as `.cursor/rules/sia.mdc`). The **curl** variant is the `sia()` helper and the six calls from the README.
-- **Hero.** Three flattened, tilted ellipses around the logo's amber dot. Episodes near the centre turn amber
-  about every 3 s, and the same number of old lessons turn back to white ("weak ones retire"), so the colour mix
-  stays steady. A small key under the canvas names the three colours. The pixel ratio is capped at 2.
+- **Hero.** A static, labeled SVG diagram of the three loops (DESIGN_RULES Appendix A). The one animation is an
+  amber square, a lesson, that travels through loop 1, into loop 2 and on into loop 3 every 14 s. It pauses
+  off-screen or in a hidden tab, and rests between loops 1 and 2 under reduced motion.
+- **How it learns** is three steps in order, each with real output: two `/run` responses from
+  `gemini-flash-latest` on the `examples/demo.py` refund policy (21 October 2026), and the two real `/improve`
+  decisions from the Results table.
 - **Scroll-spy.** The `IntersectionObserver` (rootMargin `-40% 0px -55% 0px`) triggers an update, and the update
   picks the last section whose top is above the band; Pricing becomes active once the page bottom is reached.
   Firing only on intersection skipped sections on fast scrolls and could never reach the last short section.
@@ -74,3 +80,24 @@ Fonts.
   markdown". The footer and sidebar stay.
 - **Font fallbacks**: Georgia, Arial and Courier New `@font-face` aliases with `size-adjust` and ascent/descent
   overrides, to limit layout shift while the web fonts load.
+
+## DESIGN_RULES.md
+
+The page and the dashboard follow `DESIGN_RULES.md`. Where a rule is bent, this is the one-sentence reason
+(Appendix B):
+
+- **Corner brackets** appear in two places only: the secondary button and the hero frame. They're drawn with
+  solid-color `linear-gradient` strokes, not color sweeps, because that's the only way to paint four corners with
+  one pseudo-element.
+- **The scroll-spy tick ladder** (a `repeating-linear-gradient`) is a measured scale, one tick per 6 px, that shows
+  where you are on the page; it isn't decoration.
+- **Code blocks and the hero use a dark fill** in both themes so code and the diagram read the same everywhere.
+  There's no window chrome and no typing effect.
+- **One shadow**, reserved for the prompt-variant menu, which floats over the page.
+- **Type**: four sizes (`--t-display`, `--t-title`, `--t-body`, `--t-small`) on the page, and four in the
+  dashboard (`--t-1` to `--t-4`). Text inside the SVG diagram is in SVG units and scales with it.
+- **Contact** links read `<body data-contact>`. Until it's set they point to the GitHub issues page. **Set it on
+  every page before publishing**, since the privacy policy relies on it for data requests.
+- **Legal pages** describe what the code actually stores and logs. They were written without a lawyer: have one
+  review them, and confirm the refund terms, before taking payments.
+

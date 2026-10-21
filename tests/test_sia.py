@@ -313,3 +313,8 @@ def test_landing_page_is_served_without_shadowing_the_api(tmp_path, monkeypatch)
     assert c.get("/health").json()["ok"] and c.get("/docs").status_code == 200
     assert c.get("/v1/me").status_code == 401 and c.get("/dashboard").status_code == 200
     assert c.get("/llms.txt").status_code == 200 and c.get("/agent.md").status_code == 200
+    # legal pages and a designed 404 (DESIGN_RULES.md section 7)
+    assert "Privacy policy" in c.get("/privacy").text and "Terms of service" in c.get("/terms").text
+    missing = c.get("/no-such-page")
+    assert missing.status_code == 404 and "doesn't exist" in missing.text
+    assert c.get("/v1/no-such-route").headers["content-type"].startswith("application/json")

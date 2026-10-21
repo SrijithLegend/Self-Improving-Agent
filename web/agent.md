@@ -19,11 +19,17 @@ Fine-tuning can fix that, but it is costly, slow to repeat and ties you to one p
 
 ## How it learns
 
-1. **Within a task:** draft, critique against your rubric, revise, keep the best.
-2. **Across tasks:** short lessons that gain or lose trust based on outcomes; weak ones retire.
-3. **Consolidation:** the playbook is rewritten, then adopted only if it beats the current one on your eval set.
+1. **Within a task: draft, critique, revise.** SIA has the model answer, critique the answer against your rubric
+   and revise it, then keeps the best attempt. In a real run the first draft fell short, so it took 3 attempts to
+   reach a full score.
+2. **Across tasks: lessons that earn trust.** After a task, SIA writes down what generalizes as short lessons, and
+   the next task starts with them. In three real runs in a row, run 1 saved 2 lessons, run 2 used 2, and run 3
+   used 4. Lessons it wrote in an earlier run include "prioritise EU withdrawal rights over usage limits".
+3. **Consolidation: a new playbook, only if it wins.** SIA folds the lessons into a candidate playbook and scores it
+   against the current one on the same eval examples, and switches only if the candidate scores clearly higher.
+   In two real runs: 0.73 against 0.65 (kept the current one) and 0.53 against 0.67 (adopted).
 
-Also: feedback, self-study, rollback, bring your own key.
+Also included: feedback, self-study, rollback, bring your own key.
 
 ## API in 60 seconds
 
@@ -80,5 +86,7 @@ Two real runs of `examples/demo.py` on the free `gemini-flash-latest` model, eac
 
 - **Self-host: free.** Run it with Docker on your own machine or server, with your own model keys. Your data stays in your database. The source is under the [Functional Source License](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/LICENSE.md) (FSL-1.1-ALv2): free to use, modify and self-host, but not to resell as a competing service. Each release becomes Apache 2.0 two years after it ships. `docker build -t sia . && docker run -p 8000:8000 -v sia-data:/data --env-file .env sia`
 - **Hosted: coming soon.** No prices yet.
+
+Privacy policy: `/privacy` · Terms of service: `/terms`
 
 © 2026 Srijith · FSL-1.1-ALv2

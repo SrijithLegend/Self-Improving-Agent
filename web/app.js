@@ -1,4 +1,4 @@
-// SIA landing page: theme, Human/Agent view, scroll-spy, copy prompt, code tabs, hero canvas, mobile drawer.
+// SIA landing page: theme, Human/Agent view, scroll-spy, copy prompt, code tabs, hero diagram, mobile drawer.
 // No dependencies. Everything that touches storage or the clipboard is wrapped, so the page works without them.
 (function () {
   "use strict";
@@ -52,16 +52,22 @@
   setThemeUI(function (b) { return b.getAttribute("data-theme-set") === savedTheme; });
 
   // --- Human / Agent view --------------------------------------------------------------------------
-  var mdText = null;
+  var mdText = null, mdLoading = false;
   function loadMarkdown() {
-    if (mdText !== null) return;
-    mdText = "";
+    if (mdText !== null || mdLoading) return;
+    var pre = $("#agent-text"), err = $("#agent-error");
+    mdLoading = true; err.hidden = true; pre.hidden = false;
+    pre.setAttribute("data-state", "loading"); pre.setAttribute("aria-busy", "true"); pre.textContent = "Loading agent.md…";
     fetch("/agent.md").then(function (r) {
       if (!r.ok) throw new Error(r.status);
       return r.text();
-    }).then(function (t) { mdText = t; $("#agent-text").textContent = t; })
-      .catch(function () { mdText = null; $("#agent-text").textContent = "Couldn't load /agent.md. Open it directly from the link above."; });
+    }).then(function (t) {
+      mdText = t; pre.textContent = t; pre.removeAttribute("data-state");
+    }).catch(function () {
+      pre.hidden = true; err.hidden = false;
+    }).then(function () { mdLoading = false; pre.removeAttribute("aria-busy"); });
   }
+  $("[data-retry-md]").addEventListener("click", loadMarkdown);
   function setView(v, push) {
     if (v === "agent") { root.setAttribute("data-view", "agent"); loadMarkdown(); }
     else root.removeAttribute("data-view");
@@ -146,8 +152,10 @@
 
   function copyPrompt() {
     copy(PROMPTS[variant]).then(function (ok) {
-      if (!ok) { announce("Copy failed. Your browser blocked clipboard access."); return; }
-      [longLabel, shortLabel].forEach(function (l) { flash(l, "Copied ✓", NAMES[variant] + " setup prompt copied"); });
+      [longLabel, shortLabel].forEach(function (l) {
+        if (ok) flash(l, "Copied", NAMES[variant] + " setup prompt copied");
+        else flash(l, "Copy failed", "Copy failed. Your browser blocked clipboard access.");
+      });
     });
   }
   copyBtn.addEventListener("click", copyPrompt);
@@ -208,14 +216,14 @@
     var panel = $('[role="tabpanel"]:not([hidden])');
     var btn = e.currentTarget;
     copy(panel.textContent).then(function (ok) {
-      if (ok) flash(btn, "Copied ✓", "Code copied"); else announce("Copy failed. Your browser blocked clipboard access.");
+      if (ok) flash(btn, "Copied", "Code copied"); else flash(btn, "Copy failed", "Copy failed. Your browser blocked clipboard access.");
     });
   });
   $("[data-copy-md]").addEventListener("click", function (e) {
     var btn = e.currentTarget;
     var text = mdText || $("#agent-text").textContent;
     copy(text).then(function (ok) {
-      if (ok) flash(btn, "Copied ✓", "Markdown copied"); else announce("Copy failed. Your browser blocked clipboard access.");
+      if (ok) flash(btn, "Copied", "Markdown copied"); else flash(btn, "Copy failed", "Copy failed. Your browser blocked clipboard access.");
     });
   });
 
@@ -314,122 +322,33 @@
     if (!mobile.matches) closeDrawer(false);
   });
 
-  // --- hero canvas: three learning loops ------------------------------------------------------------
-  var canvas = $("#hero");
-  if (canvas && canvas.getContext) hero(canvas);
+  // --- hero diagram: the page's one animation. A lesson token travels through the three loops. -------
+  var loops = $("#loops");
+  if (loops) heroLoops(loops);
 
-  function hero(cv) {
-    var ctx = cv.getContext("2d");
-    var TEAL = "#3DB3A0", AMBER = "#F0B457", WHITE = "rgba(255,255,255,0.4)", BG = "#0E1B2A";
-    var KNOW = 0, EPI = 1, LESSON = 2;
-    var W = 0, H = 0, dpr = 1, parts = [], running = false, visible = true, raf = 0, t0 = performance.now(), lastLearn = 0;
-    // three tilted, flattened ellipses that all pass close to the centre (like the loop in the logo)
-    var ORBITS = [{ tilt: -0.42, speed: 0.16 }, { tilt: 0.62, speed: -0.12 }, { tilt: 1.62, speed: 0.1 }];
-
-    function rand(a, b) { return a + Math.random() * (b - a); }
-    function build() {
-      var n = window.innerWidth < 768 ? 500 : 900;
-      parts = [];
-      for (var i = 0; i < n; i++) {
-        var r = Math.random();
-        parts.push({
-          o: i % 3, a: Math.random() * Math.PI * 2, sp: rand(0.6, 1.4),
-          dr: rand(-1, 1), ph: Math.random() * Math.PI * 2, f: rand(0.4, 1.2),
-          kind: r < 0.38 ? KNOW : r < 0.82 ? EPI : LESSON, size: Math.random() < 0.5 ? 2 : 3, glow: 0
-        });
-      }
+  function heroLoops(svg) {
+    var path = $("#loops-path", svg), token = $("#loops-token", svg);
+    if (!path.getTotalLength) return;
+    var len = path.getTotalLength(), LOOP_MS = 14000, running = false, visible = true, raf = 0, start = 0;
+    function place(frac) {
+      var pt = path.getPointAtLength(frac * len);
+      token.setAttribute("x", (pt.x - 6).toFixed(1)); token.setAttribute("y", (pt.y - 6).toFixed(1));
     }
-    function resize() {
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
-      W = cv.clientWidth; H = cv.clientHeight;
-      cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
-    function readBg() { BG = getComputedStyle(cv.parentNode).backgroundColor || BG; }
-    function pos(p, t) {
-      var orb = ORBITS[p.o], R = Math.min(W * 0.42, H * 0.78);
-      var a = R * 0.66, b = R * 0.19;
-      var noise = 1 + 0.06 * p.dr + 0.025 * Math.sin(t * p.f + p.ph);
-      var th = p.a;
-      var x = Math.cos(th) * a * noise, y = Math.sin(th) * b * noise;
-      var c = Math.cos(orb.tilt), s = Math.sin(orb.tilt);
-      return [W / 2 + x * c - y * s, H / 2 + x * s + y * c, Math.sin(th)];
-    }
-    function frame(now, step) {
-      var t = (now - t0) / 1000;
-      ctx.fillStyle = BG; ctx.fillRect(0, 0, W, H);
-      // a lesson is learned: about every 3 s, white episodes near the centre turn amber; old lessons retire
-      if (step && now - lastLearn > 3000) {
-        lastLearn = now;
-        var near = parts.filter(function (p) {
-          if (p.kind !== EPI) return false;
-          var q = pos(p, t), dx = q[0] - W / 2, dy = q[1] - H / 2;
-          return dx * dx + dy * dy < Math.pow(Math.min(W, H) * 0.09, 2);
-        }).slice(0, 6);
-        near.forEach(function (p) { p.kind = LESSON; p.glow = 1; });
-        var lessons = parts.filter(function (p) { return p.kind === LESSON && !p.glow; });
-        for (var k = 0; k < near.length && lessons.length; k++) lessons.splice(Math.floor(Math.random() * lessons.length), 1)[0].kind = EPI;
-      }
-      var buckets = [[], [], []];
-      for (var i = 0; i < parts.length; i++) {
-        var p = parts[i];
-        if (step) p.a += ORBITS[p.o].speed * p.sp * step;
-        buckets[p.kind].push(p);
-      }
-      var colors = [TEAL, WHITE, AMBER];
-      for (var kind = 0; kind < 3; kind++) {
-        ctx.fillStyle = colors[kind];
-        var list = buckets[kind];
-        for (var j = 0; j < list.length; j++) {
-          var q = pos(list[j], t), s = list[j].size;
-          ctx.globalAlpha = 0.55 + 0.45 * (q[2] * 0.5 + 0.5);  // back of the orbit is dimmer
-          ctx.fillRect(q[0] - s / 2, q[1] - s / 2, s, s);
-          if (list[j].glow > 0) {
-            var g = 3 + 6 * list[j].glow;
-            ctx.globalAlpha = 0.5 * list[j].glow;
-            ctx.fillRect(q[0] - g / 2, q[1] - g / 2, g, g);
-            if (step) list[j].glow = Math.max(0, list[j].glow - step * 0.6);
-          }
-        }
-      }
-      // the centre: the amber dot from the logo
-      ctx.globalAlpha = 1; ctx.fillStyle = AMBER;
-      var c = Math.max(5, Math.min(W, H) * 0.018);
-      ctx.beginPath(); ctx.arc(W / 2, H / 2, c, 0, Math.PI * 2); ctx.fill();
-      ctx.globalAlpha = 0.18; ctx.beginPath(); ctx.arc(W / 2, H / 2, c * 2.6, 0, Math.PI * 2); ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-    var last = 0;
-    function loop(now) {
-      var step = last ? Math.min((now - last) / 1000, 0.05) : 0;
-      last = now;
-      frame(now, step);
-      raf = requestAnimationFrame(loop);
+    function tick(now) {
+      if (!start) start = now;
+      place(((now - start) % LOOP_MS) / LOOP_MS);
+      raf = requestAnimationFrame(tick);
     }
     function update() {
       var should = visible && !document.hidden && !reduced.matches;
-      if (should && !running) { running = true; last = 0; raf = requestAnimationFrame(loop); }
+      if (should && !running) { running = true; start = 0; raf = requestAnimationFrame(tick); }
       else if (!should && running) { running = false; cancelAnimationFrame(raf); }
-      if (!should) frame(performance.now(), 0);  // one static frame
-      cv.setAttribute("data-running", running ? "1" : "0");
+      if (reduced.matches) place(0.33);  // still: the token rests between loop 1 and loop 2
+      svg.setAttribute("data-running", running ? "1" : "0");
     }
-    build(); resize();
-    var lastW = window.innerWidth;
-    if ("ResizeObserver" in window) new ResizeObserver(function () {
-      resize();
-      if ((window.innerWidth < 768) !== (lastW < 768)) build();
-      lastW = window.innerWidth;
-      if (!running) frame(performance.now(), 0);
-    }).observe(cv);
-    if ("IntersectionObserver" in window) new IntersectionObserver(function (en) { visible = en[0].isIntersecting; update(); }).observe(cv);
+    if ("IntersectionObserver" in window) new IntersectionObserver(function (en) { visible = en[0].isIntersecting; update(); }).observe(svg);
     document.addEventListener("visibilitychange", update);
     (reduced.addEventListener ? reduced.addEventListener.bind(reduced, "change") : reduced.addListener.bind(reduced))(update);
-    // re-read the background (--hero-bg) when the theme changes
-    function themeChanged() { readBg(); if (!running) frame(performance.now(), 0); }
-    new MutationObserver(themeChanged).observe(root, { attributes: true, attributeFilter: ["data-theme"] });
-    var scheme = window.matchMedia("(prefers-color-scheme: dark)");
-    (scheme.addEventListener ? scheme.addEventListener.bind(scheme, "change") : scheme.addListener.bind(scheme))(themeChanged);
-    readBg();
     update();
   }
 })();

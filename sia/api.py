@@ -104,7 +104,9 @@ async def guard_and_log(request: Request, call_next):
     h["X-Request-ID"] = request.state.request_id
     if request.url.scheme == "https":
         h["Strict-Transport-Security"] = sec.HSTS
-    if "content-security-policy" not in h and not path.startswith(NO_CSP):
+    # A 304 has no content type, and browsers copy its headers onto the cached page: giving it the API policy
+    # would block the page's own scripts and styles on every revisit. It keeps the policy it was served with.
+    if "content-security-policy" not in h and not path.startswith(NO_CSP) and response.status_code != 304:
         h["Content-Security-Policy"] = LANDING_CSP if h.get("content-type", "").startswith("text/html") \
             else sec.API_CSP
     if path.startswith("/v1/"):
@@ -946,5 +948,17 @@ def activate_playbook(version: int, a=Depends(owned_agent)):
 
 # The landing page. Mounted last: routes registered above (/docs, /health, /v1/*, /dashboard) take priority.
 if WEB.is_dir():  # a pip install ships the API without the landing page
+    from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
-    app.mount("/", StaticFiles(directory=WEB, html=True), name="web")
+
+    @app.get("/privacy", include_in_schema=False)
+    @app.get("/terms", include_in_schema=False)
+    def legal_page(request: Request):
+        return FileResponse(WEB / f"{request.url.path.strip('/')}.html")
+
+    # without this, unknown API paths would fall through to the mount and get the HTML 404 page
+    @app.api_route("/v1/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False)
+    def unknown_api_route(rest: str):
+        raise HTTPException(404, "Not Found")
+
+    app.mount("/", StaticFiles(directory=WEB, html=True), name="web")  # also serves 404.html for unknown paths

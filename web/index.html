@@ -10,8 +10,11 @@
 <meta property="og:type" content="website">
 <meta property="og:title" content="SIA: Self-Improving Agent API">
 <meta property="og:description" content="Agents that learn your domain from every answer, correction and document.">
-<meta property="og:image" content="/assets/logo.svg">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="SIA: agents that learn your domain from every answer, correction and document.">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
 <link rel="alternate" type="text/markdown" href="/agent.md" title="This page as markdown">
 <script>
@@ -24,6 +27,7 @@
     if ((q || v) === "agent") d.setAttribute("data-view", "agent");
   })();
 </script>
+<script src="/site.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,500..600,30&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -130,11 +134,36 @@
       </div>
     </div>
 
-    <figure class="hero brackets">
-      <canvas id="hero" role="img" aria-label="Animation: three tilted orbits of small squares circle a central dot, standing for SIA's three learning loops. Teal squares are knowledge, white squares are episodes and amber squares are lessons; every few seconds some white squares turn amber as they pass the centre, showing a lesson being learned."></canvas>
-      <figcaption class="hero-key" aria-hidden="true">
-        <span><i class="k-teal"></i>knowledge</span><span><i class="k-white"></i>episodes</span><span><i class="k-amber"></i>lessons</span>
-      </figcaption>
+    <figure class="hero">
+      <div class="hero-frame brackets">
+        <svg class="loops" id="loops" viewBox="0 0 1000 500" role="img" aria-labelledby="loops-t loops-d">
+          <title id="loops-t">How SIA learns: three loops</title>
+          <desc id="loops-d">Three circles from left to right. Loop 1, within a task: draft, critique, revise; it keeps the best answer.
+            Loop 2, across tasks: answer, lesson, next task; lessons gain or lose trust. Loop 3, consolidation: lessons, new
+            playbook, eval against the current one; the new playbook is adopted only if it scores higher. An amber square, a
+            lesson, travels from loop 1 through loop 2 into loop 3.</desc>
+          <path id="loops-path" fill="none" d="M60 250 A120 120 0 1 1 300 250 A120 120 0 1 1 60 250 A120 120 0 1 1 300 250 L380 250 A120 120 0 1 1 620 250 A120 120 0 1 1 380 250 A120 120 0 1 1 620 250 L700 250 A120 120 0 1 1 940 250 A120 120 0 1 1 700 250 A120 120 0 1 1 940 250"/>
+          <g aria-hidden="true">
+            <circle class="ring" cx="180" cy="250" r="120"/>
+            <circle class="ring" cx="500" cy="250" r="120"/>
+            <circle class="ring" cx="820" cy="250" r="120"/>
+            <path class="ring lesson" d="M300 250 H380 M620 250 H700"/>
+            <path class="core" d="M174 124 l12 6 -12 6 Z M494 124 l12 6 -12 6 Z M814 124 l12 6 -12 6 Z"/>
+            <text class="ring-name" x="180" y="96" text-anchor="middle">01 within a task</text>
+            <text class="ring-name" x="500" y="96" text-anchor="middle">02 across tasks</text>
+            <text class="ring-name amber" x="820" y="96" text-anchor="middle">03 consolidation</text>
+            <text text-anchor="middle"><tspan x="180" y="222">draft</tspan><tspan x="180" y="256">critique</tspan><tspan x="180" y="290">revise</tspan></text>
+            <text text-anchor="middle"><tspan x="500" y="222">answer</tspan><tspan x="500" y="256">lesson</tspan><tspan x="500" y="290">next task</tspan></text>
+            <text text-anchor="middle"><tspan x="820" y="222">lessons</tspan><tspan x="820" y="256">new playbook</tspan><tspan x="820" y="290">eval vs current</tspan></text>
+            <text class="core-label" text-anchor="middle"><tspan x="180" y="418">keeps the best</tspan><tspan x="180" y="448">answer</tspan></text>
+            <text class="core-label" text-anchor="middle"><tspan x="500" y="418">lessons gain or</tspan><tspan x="500" y="448">lose trust</tspan></text>
+            <text class="core-label" text-anchor="middle"><tspan x="820" y="418">adopted only if</tspan><tspan x="820" y="448">it scores higher</tspan></text>
+            <rect class="token" id="loops-token" x="374" y="244" width="12" height="12"/>
+          </g>
+        </svg>
+      </div>
+      <figcaption>The amber square is one lesson: learned while an answer is revised, reused in the next task, and kept in
+        the playbook only if the new playbook scores higher on your eval set.</figcaption>
     </figure>
 
     <section id="mission" aria-labelledby="h-mission">
@@ -148,11 +177,47 @@
 
     <section id="how" aria-labelledby="h-how">
       <h2 id="h-how">How it learns</h2>
-      <ol class="cards">
-        <li class="card"><span class="step">01</span><h3>Within a task</h3><p>Draft, critique against your rubric, revise, keep the best.</p></li>
-        <li class="card"><span class="step">02</span><h3>Across tasks</h3><p>Short lessons that gain or lose trust based on outcomes; weak ones retire.</p></li>
-        <li class="card"><span class="step">03</span><h3>Consolidation</h3><p>The playbook is rewritten, then adopted only if it beats the current one on your eval set.</p></li>
+      <ol class="steps">
+        <li>
+          <span class="step">01</span>
+          <div>
+            <h3>Within a task: draft, critique, revise</h3>
+            <p>SIA has the model answer, critique the answer against your rubric and revise it, then keeps the best
+              attempt. Here the first draft fell short, so it took 3 attempts to reach a full score.</p>
+            <figure class="excerpt"><figcaption>POST /run · real response fields</figcaption><pre><span class="k">"task":</span> "I'm in France, monthly plan $29, charged 5 days ago, used 25 GB. Refund?"
+<span class="k">"attempts":</span> <span class="hl">3</span>,  <span class="k">"score":</span> <span class="hl">1.0</span>,  <span class="k">"lessons_used":</span> [2 lessons]</pre></figure>
+          </div>
+        </li>
+        <li>
+          <span class="step">02</span>
+          <div>
+            <h3>Across tasks: lessons that earn trust</h3>
+            <p>After a task, SIA writes down what generalizes as short lessons, and the next task starts with them.
+              Lessons used in good answers gain trust; the rest fade out and retire.</p>
+            <figure class="excerpt"><figcaption>Three /run calls in a row · real results</figcaption><pre><span class="k">         attempts  score  new_lessons  lessons_used</span>
+run 1           1    0.8            2             0
+run 2           3    1.0            2             <span class="hl">2</span>
+run 3           1    1.0            0             <span class="hl">4</span>
+
+<span class="k">// lessons it wrote in an earlier run, for example:</span>
+"prioritise EU withdrawal rights over usage limits"
+"add the finance-approval days to the payout timeline"</pre></figure>
+          </div>
+        </li>
+        <li>
+          <span class="step">03</span>
+          <div>
+            <h3>Consolidation: a new playbook, only if it wins</h3>
+            <p>SIA folds the lessons into a candidate playbook and scores it against the current one on the same eval
+              examples. It switches only if the candidate scores clearly higher.</p>
+            <figure class="excerpt"><figcaption>POST /improve · the two runs in Results below</figcaption><pre><span class="k">               current  candidate  adopted</span>
+run 1 (6 ex.)     0.73       0.65  <span class="hl">false</span>
+run 2 (6 ex.)     0.53       0.67  <span class="hl">true</span></pre></figure>
+          </div>
+        </li>
       </ol>
+      <p class="notify-note">Steps 1 and 2: <code>gemini-flash-latest</code> on the refund policy in
+        <code>examples/demo.py</code>, 21 October 2026.</p>
       <ul class="chips" aria-label="Also included">
         <li>Feedback</li><li>Self-study</li><li>Rollback</li><li>BYO key</li>
       </ul>
@@ -273,7 +338,7 @@ await sia(`/v1/agents/${agent.id}/feedback`, { episode_id: run.episode_id, ratin
 
     <section id="pricing" aria-labelledby="h-pricing">
       <h2 id="h-pricing">Pricing</h2>
-      <div class="cards two">
+      <div class="cards">
         <div class="card">
           <span class="step">Self-host</span>
           <h3>Free</h3>
@@ -291,6 +356,7 @@ await sia(`/v1/agents/${agent.id}/feedback`, { episode_id: run.episode_id, ratin
             <input id="notify-email" name="email" type="email" required autocomplete="email" placeholder="you@company.com">
             <button type="submit">Notify me</button>
           </form>
+          <p class="notify-note">How we handle your address: <a href="/privacy">privacy policy</a>.</p>
         </div>
       </div>
     </section>
@@ -302,7 +368,11 @@ await sia(`/v1/agents/${agent.id}/feedback`, { episode_id: run.episode_id, ratin
       <a class="agent-link" href="/agent.md">Open raw</a>
       <button type="button" class="code-copy" data-copy-md>Copy as markdown</button>
     </div>
-    <pre class="agent-text" id="agent-text" tabindex="0">Loading /agent.md…</pre>
+    <pre class="agent-text" id="agent-text" tabindex="0" data-state="loading" aria-busy="true">Loading agent.md…</pre>
+    <div class="agent-error" id="agent-error" role="alert" hidden>
+      <p>agent.md didn't load. Check your connection, then try again, or open <a href="/agent.md">the raw file</a>.</p>
+      <button type="button" data-retry-md>Try again</button>
+    </div>
   </div>
 </main>
 
@@ -318,6 +388,9 @@ await sia(`/v1/agents/${agent.id}/feedback`, { episode_id: run.episode_id, ratin
     <li><a href="/llms.txt">llms.txt</a></li>
     <li><a href="/agent.md">agent.md</a></li>
     <li><a href="https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/LICENSE.md" target="_blank" rel="noopener">License<span class="sr"> (opens in a new tab)</span></a></li>
+    <li><a href="/privacy">Privacy</a></li>
+    <li><a href="/terms">Terms</a></li>
+    <li><a data-contact-link href="https://github.com/SrijithLegend/Self-Improving-Agent/issues">Contact</a></li>
   </ul>
   <div class="theme" role="radiogroup" aria-label="Theme">
     <button type="button" role="radio" data-theme-set="light" aria-checked="false" tabindex="-1">Light</button>
@@ -333,7 +406,7 @@ await sia(`/v1/agents/${agent.id}/feedback`, { episode_id: run.episode_id, ratin
   <symbol id="logo" viewBox="0 0 32 32">
     <path d="M26 16a10 10 0 1 1-3-7.1" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/>
     <path d="M23.5 3.5v6h-6" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
-    <circle cx="16" cy="16" r="3.2" fill="#E39B2D"/>
+    <circle cx="16" cy="16" r="3.2" fill="var(--signal)"/>
   </symbol>
 </svg>
 <script src="/app.js" defer></script>
