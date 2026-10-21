@@ -345,7 +345,7 @@ All under `/v1`, `Authorization: Bearer <key>`. Lists take `limit`/`offset` and 
 |---|---|---|
 | `GET /me` | any | organization, plan, limits, key scope |
 | `GET/POST /keys`, `POST /keys/{id}/revoke`, `POST /keys/rotate` | full | key management |
-| `GET /usage?days=30` | full | requests, units, runs this month (included vs overage) |
+| `GET /usage?days=30` | full | requests, units, runs this month (`used`, `included`, `overage`, `hard_cap_runs`, `percent_used`, `resets`) |
 | `POST /projects` | any | get or create by name (ingest keys: lookup only) |
 | `GET /projects`, `GET/PATCH /projects/{p}` | full | projects and settings |
 | `GET /projects/{p}/overview`, `/audit` | full | dashboard numbers, audit log |
@@ -417,9 +417,12 @@ Project settings (`sia.update_settings(...)`, `PATCH /projects/{p}`, or the dash
 | | Free | Pro | Team |
 |---|---|---|---|
 | Projects | 1 | 10 | 100 |
-| Runs / month | 10,000 (hard stop) | 250,000 + overage | 2,000,000 + overage |
+| Runs / month | 10,000 (hard stop) | 250,000, accepted up to 500,000 | 2,000,000, accepted up to 4,000,000 |
 | Examples per dataset | 200 | 5,000 | 50,000 |
 | Run retention | 14 days | 90 days | 365 days |
+
+Overage on paid plans is not billed during the beta, so ingest is refused at twice the included runs (`hard_cap`)
+until the first of the next month (UTC). The dashboard warns at 80% and 100% of the included runs.
 
 Local mode has no limits. Paid plans are bought through Razorpay (next section); an admin can also set a plan
 with no expiry via `POST /v1/admin/orgs/{id}/plan` or `sia set-plan`.

@@ -40,3 +40,12 @@ Every place where the spec left room, and what was picked. Change any of these f
 - **Fallback**: when the address is unset or the fetch fails, links keep the GitHub-issues `href` and their written
   text (for example "us"), instead of the old replacement text.
 - **Grievance contact** is a paragraph under "Your rights" in the privacy policy, with the same 30-day answer time.
+
+## Task 4: usage cap
+
+- **A batch that would cross the cap is refused whole** (402), like the free plan's limit already worked, so a
+  client never gets a half-accepted batch. Runs exactly up to the cap are accepted.
+- **`/v1/usage` also returns `resets`** (the next first-of-month, UTC), which the dashboard banner shows.
+- **Dashboard banner**: one line, the most severe that applies: refused at the cap (red), past 100% of included
+  runs (amber), or at 80% or more (amber).
+- **Terms §7** names the included runs for each plan and says overage isn't billed during the beta.

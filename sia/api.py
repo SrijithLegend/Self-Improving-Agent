@@ -168,6 +168,16 @@ def month_start():
     return datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
 
 
+def next_month_start():
+    d = datetime.fromtimestamp(month_start(), timezone.utc)
+    return d.replace(year=d.year + d.month // 12, month=d.month % 12 + 1)
+
+
+def run_cap(lim):
+    """Runs a month before ingest is refused: the included runs, or up to hard_cap times that on paid plans."""
+    return int(lim["runs_per_month"] * (lim.get("hard_cap", 1) if lim["overage"] else 1))
+
+
 def require_admin(request: Request, x_admin_key: str):
     admin = os.getenv("SIA_ADMIN_KEY", "")
     if problem := sec.admin_key_problem(admin):
@@ -629,7 +639,10 @@ def usage(days: int = 30, t=Depends(tenant)):
     included = lim["runs_per_month"] if lim else None
     return {"days": days, "plan": t["plan"], "limits": lim, **store.usage(t["id"], time.time() - days * 86400),
             "runs_this_month": {"used": used, "included": included,
-                                "overage": max(0, used - included) if included is not None else 0}}
+                                "overage": max(0, used - included) if included is not None else 0,
+                                "hard_cap_runs": run_cap(lim) if lim else None,
+                                "percent_used": round(100 * used / included, 1) if included else None,
+                                "resets": next_month_start().timestamp()}}
 
 
 # --- DevTools: projects ----------------------------------------------------------
@@ -674,9 +687,10 @@ def audit(project_id: str, limit: int = 100, t=Depends(tenant)):
 def ingest_runs(project_id: str, body: RunsIn, t=Depends(key_auth)):
     """Insert or update runs by id; resending a batch is safe."""
     lim = limits(t)
-    if lim and not lim["overage"] and \
-            store.units_since(t["id"], "runs", month_start()) + len(body.runs) > lim["runs_per_month"]:
-        raise QuotaExceeded(f"Monthly run quota of the {t['plan']} plan ({lim['runs_per_month']}) reached.")
+    if lim and store.units_since(t["id"], "runs", month_start()) + len(body.runs) > run_cap(lim):
+        cap = f"{lim['runs_per_month']:,} runs" + (f", up to {run_cap(lim):,} with overage" if lim["overage"] else "")
+        raise QuotaExceeded(f"Monthly run limit of the {t['plan']} plan reached ({cap}). It resets on "
+                            f"{next_month_start():%d %B %Y} (UTC).")
     n = dev.log_runs(t["id"], project_id, [r.model_dump() for r in body.runs],
                      retention_days=lim["retention_days"] if lim else None)
     store.record_usage(t["id"], None, "runs", 0, units=n, project_id=project_id)

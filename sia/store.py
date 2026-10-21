@@ -66,10 +66,12 @@ PLANS = {
     "free": {"projects": 1, "runs_per_month": 10_000, "examples_per_dataset": 200, "retention_days": 14,
              "overage": False},
     "pro": {"projects": 10, "runs_per_month": 250_000, "examples_per_dataset": 5_000, "retention_days": 90,
-            "overage": True},
+            "overage": True, "hard_cap": 2.0},
     "team": {"projects": 100, "runs_per_month": 2_000_000, "examples_per_dataset": 50_000, "retention_days": 365,
-             "overage": True},
+             "overage": True, "hard_cap": 2.0},
 }
+# hard_cap: paid plans may go past their included runs up to this multiple. Overage isn't billed during the beta,
+# so without a cap a paid plan would be unlimited.
 KEY_SCOPES = ("full", "ingest")  # ingest: send runs and feedback, read the active prompt; nothing else
 
 PRIOR, PRIOR_WEIGHT = 0.7, 2  # new lessons start with a mildly optimistic utility

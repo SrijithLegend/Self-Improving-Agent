@@ -122,3 +122,52 @@ def test_site_config_without_contact_email(tmp_path, monkeypatch):
 def test_site_config_with_contact_email(tmp_path, monkeypatch):
     api, c = make(tmp_path, monkeypatch, SIA_CONTACT_EMAIL=" hello@example.com ")
     assert c.get("/site-config.json").json() == {"contact_email": "hello@example.com"}
+
+
+# --- Task 4: paid-plan run cap ----------------------------------------------------------------------------------
+def test_paid_plan_overage_is_capped_at_twice_the_included_runs(tmp_path, monkeypatch):
+    api, c = make(tmp_path, monkeypatch)
+    monkeypatch.setitem(api.PLANS, "pro", {**api.PLANS["pro"], "runs_per_month": 10})
+    org = api.store.create_tenant("Acme")
+    api.store.set_plan(org["tenant_id"], "pro")
+    h = {"Authorization": f"Bearer {org['api_key']}"}
+    pid = c.post("/v1/projects", json={"name": "p"}, headers=h).json()["id"]
+    post = lambda n, start: c.post(f"/v1/projects/{pid}/runs", headers=h,  # noqa: E731
+                                   json={"runs": [{"id": f"r{start + i}", "name": "step"} for i in range(n)]})
+
+    assert post(8, 0).status_code == 202  # under the included runs
+    u = c.get("/v1/usage", headers=h).json()["runs_this_month"]
+    assert (u["used"], u["included"], u["overage"], u["hard_cap_runs"], u["percent_used"]) == (8, 10, 0, 20, 80.0)
+
+    assert post(7, 8).status_code == 202  # between 1x and 2x: accepted, overage reported
+    u = c.get("/v1/usage", headers=h).json()["runs_this_month"]
+    assert (u["used"], u["overage"], u["percent_used"]) == (15, 5, 150.0)
+
+    assert post(5, 15).status_code == 202  # exactly at the cap
+    r = post(1, 20)  # past the 2x cap: refused, naming the cap and the reset date
+    assert r.status_code == 402
+    assert "20 with overage" in r.json()["detail"] and f"{api.next_month_start():%d %B %Y}" in r.json()["detail"]
+
+    # a new month: last month's runs no longer count
+    api.store.x("UPDATE usage SET created=?", api.month_start() - 1)
+    assert post(1, 20).status_code == 202
+    assert c.get("/v1/usage", headers=h).json()["runs_this_month"]["used"] == 1
+
+
+def test_free_plan_has_no_overage(tmp_path, monkeypatch):
+    api, c = make(tmp_path, monkeypatch)
+    monkeypatch.setitem(api.PLANS, "free", {**api.PLANS["free"], "runs_per_month": 3})
+    org = api.store.create_tenant("Solo")
+    h = {"Authorization": f"Bearer {org['api_key']}"}
+    pid = c.post("/v1/projects", json={"name": "p"}, headers=h).json()["id"]
+    body = lambda ids: {"runs": [{"id": i, "name": "s"} for i in ids]}  # noqa: E731
+    assert c.post(f"/v1/projects/{pid}/runs", json=body(["a", "b", "c"]), headers=h).status_code == 202
+    assert c.post(f"/v1/projects/{pid}/runs", json=body(["d"]), headers=h).status_code == 402
+    assert c.get("/v1/usage", headers=h).json()["runs_this_month"]["hard_cap_runs"] == 3
+
+
+def test_next_month_start_rolls_over_december(monkeypatch):
+    import sia.api as api
+    from datetime import datetime, timezone
+    monkeypatch.setattr(api, "month_start", lambda: datetime(2026, 12, 1, tzinfo=timezone.utc).timestamp())
+    assert api.next_month_start() == datetime(2027, 1, 1, tzinfo=timezone.utc)

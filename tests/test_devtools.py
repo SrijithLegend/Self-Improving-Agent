@@ -596,7 +596,9 @@ def test_plan_limits_are_enforced_server_side(tmp_path, monkeypatch):
     monkeypatch.setitem(api.PLANS["pro"], "runs_per_month", 2)
     assert c.post(f"/v1/projects/{pid}/runs", json={"runs": [{"id": "c", "name": "n"}]}, headers=h).status_code == 202
     u = c.get("/v1/usage", headers=h).json()
-    assert u["plan"] == "pro" and u["runs_this_month"] == {"used": 3, "included": 2, "overage": 1}
+    assert u["plan"] == "pro" and u["runs_this_month"] == {"used": 3, "included": 2, "overage": 1, "hard_cap_runs": 4,
+                                                           "percent_used": 150.0,
+                                                           "resets": api.next_month_start().timestamp()}
     assert c.post("/v1/projects", json={"name": "two"}, headers=h).status_code == 200
 
 
