@@ -171,3 +171,13 @@ def test_next_month_start_rolls_over_december(monkeypatch):
     from datetime import datetime, timezone
     monkeypatch.setattr(api, "month_start", lambda: datetime(2026, 12, 1, tzinfo=timezone.utc).timestamp())
     assert api.next_month_start() == datetime(2027, 1, 1, tzinfo=timezone.utc)
+
+
+# --- Task 5: HEAD for uptime monitors ---------------------------------------------------------------------------
+def test_head_requests_answer_200_with_the_same_csp(tmp_path, monkeypatch):
+    api, c = make(tmp_path, monkeypatch)
+    for path in ("/", "/health", "/dashboard", "/privacy", "/terms"):
+        get, head = c.get(path), c.head(path)
+        assert head.status_code == get.status_code == 200, path
+        assert head.headers["content-security-policy"] == get.headers["content-security-policy"], path
+        assert head.content == b"", path

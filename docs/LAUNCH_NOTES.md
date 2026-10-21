@@ -49,3 +49,7 @@ Every place where the spec left room, and what was picked. Change any of these f
 - **Dashboard banner**: one line, the most severe that applies: refused at the cap (red), past 100% of included
   runs (amber), or at 80% or more (amber).
 - **Terms §7** names the included runs for each plan and says overage isn't billed during the beta.
+
+## Task 5: HEAD
+
+- `/privacy` and `/terms` answer `HEAD` as well as `/`, `/health` and `/dashboard`, so a monitor can watch any page.

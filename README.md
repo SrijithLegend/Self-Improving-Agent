@@ -362,7 +362,7 @@ All under `/v1`, `Authorization: Bearer <key>`. Lists take `limit`/`offset` and 
 | `POST /tenants`, `POST /admin/orgs/{id}/plan` | admin key | create organizations, change plans (payment webhook boundary) |
 | `POST /access-requests` | none | ask for hosted access (rate-limited, always `202`) |
 | `GET /admin/access-requests?status=`, `POST /admin/access-requests/{id}/approve`, `/reject` | admin key | review the queue; approve creates the organization and returns its key once |
-| `GET /health` | none | liveness and database check |
+| `GET` or `HEAD /health` | none | liveness and database check (`HEAD` for uptime monitors; `/`, `/dashboard` and the legal pages answer `HEAD` too) |
 
 Errors: `400` invalid, `401` bad or revoked key, `402` plan limit, `403` wrong scope, `404` not found (including
 another organization's data), `409` already decided, `413` body too large, `422` schema, `429` rate limit.
