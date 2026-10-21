@@ -90,3 +90,13 @@ Every place where the spec left room, and what was picked. Change any of these f
   tests, which have no network.
 - **Dashboard**: the refund link sits in the note under the plan cards, next to the pay buttons, and opens in a
   new tab so an open checkout isn't lost.
+
+## Task 9: retention job
+
+- **Run retention** is the shorter of the plan's `retention_days` and the project's own `retention_days` setting,
+  the same rule ingest uses. An expired paid pass counts as Free, so its runs drop to 14 days.
+- **Projects of organizations not in the `tenants` table** (none on a hosted server) only get their own setting.
+- **Rejected access requests** are aged from the decision time, not the request time, as the privacy policy says.
+- **Unpaid orders** are `created`-status payments older than 30 days from creation.
+- **One transaction** for the whole job; the JSON line has `runs_deleted`, `rejected_access_requests_deleted` and
+  `unpaid_orders_deleted`.

@@ -22,6 +22,22 @@ environment.
    database doesn't survive losing that disk. For continuous replication, see `examples/deploy/litestream.yml`.
 4. Once a month, do a restore drill on another machine (below) and check the row counts look right.
 
+## Daily maintenance
+
+`sia maintenance` deletes what has outlived its retention, including in idle projects:
+
+- runs older than the plan's `retention_days` (or the project's shorter setting); an expired paid plan counts as Free
+- rejected access requests 90 days after the decision
+- payment orders still `created` (never paid) after 30 days
+
+It is safe to run any number of times and prints one JSON line with the counts. Run it daily, after the backup:
+
+```cron
+45 2 * * * cd /srv/sia && sia maintenance >> /var/log/sia-maintenance.log 2>&1
+```
+
+With Docker: `docker exec sia sia maintenance`.
+
 ## Restore
 
 1. **Stop the server.** `sia restore` refuses to run while anything answers at `SIA_BASE_URL` (default

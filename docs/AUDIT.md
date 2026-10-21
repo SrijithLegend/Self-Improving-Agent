@@ -51,7 +51,8 @@ rules are tested, but these must be addressed before hosting paying customers:
 - Run export loads up to 100,000 rows into memory.
 - ~~No backups or on-call runbook.~~ Done (Task 6): `sia backup` / `sia restore`, a Litestream example and
   `docs/RUNBOOK.md`. Still no metrics or alerting. Logs go to stdout as JSON lines.
-- No retention job: retention is applied when runs are ingested, so an idle project keeps old runs until the next write.
+- ~~No retention job.~~ Done (Task 9): `sia maintenance` applies run retention to idle projects too, and deletes
+  old rejected access requests and unpaid orders. Schedule it daily (`docs/RUNBOOK.md`).
 - `sia/agent.py` managed-agent `study` and `improve` still run synchronously inside the request.
 
 **Product**

@@ -1,7 +1,8 @@
-"""Operator commands for a hosted server: backup, restore. Called by `sia backup` / `sia restore` (sia_devtools/cli.py).
+"""Operator commands for a hosted server: backup, restore, maintenance. Called by the `sia` CLI (sia_devtools/cli.py).
 
 Each returns an exit code and prints what it did; errors raise OpsError (exit 4).
 """
+import json
 import os
 import re
 import sqlite3
@@ -88,6 +89,37 @@ def restore(db, file, base_url):
     return 0
 
 
+REJECTED_REQUEST_DAYS, UNPAID_ORDER_DAYS = 90, 30
+
+
+def maintenance(db, now=None):
+    """Delete what has outlived its retention, even in idle projects (ingest applies run retention only when new
+    runs arrive). Idempotent. Prints one JSON line with the counts."""
+    from sia_devtools.store import DevStore
+
+    from .store import PLANS, Store
+    now = now or time.time()
+    st = Store(db)
+    DevStore(db)  # opening both applies their migrations, so every table below exists
+    plans = {r["id"]: r["plan"] for r in st.q(f"SELECT t.id, {Store.PLAN_SQL} plan FROM tenants t", now)}
+    with closing(sqlite3.connect(db, timeout=30)) as c, c:
+        runs = 0
+        for pid, org, settings in c.execute("SELECT id, org_id, settings FROM projects").fetchall():
+            # the shorter of the plan's retention (an expired paid plan counts as free) and the project's own setting
+            days = [d for d in ((PLANS.get(plans.get(org)) or {}).get("retention_days"),
+                                json.loads(settings or "{}").get("retention_days")) if d]
+            if days:
+                runs += c.execute("DELETE FROM runs WHERE project_id=? AND started<?",
+                                  (pid, now - min(days) * 86400)).rowcount
+        requests = c.execute("DELETE FROM access_requests WHERE status='rejected' AND decided<?",
+                             (now - REJECTED_REQUEST_DAYS * 86400,)).rowcount
+        orders = c.execute("DELETE FROM payments WHERE status='created' AND created<?",
+                           (now - UNPAID_ORDER_DAYS * 86400,)).rowcount
+    print(json.dumps({"ts": round(now, 3), "event": "maintenance", "runs_deleted": runs,
+                      "rejected_access_requests_deleted": requests, "unpaid_orders_deleted": orders}))
+    return 0
+
+
 # --- CLI entry points (argparse namespaces from sia_devtools/cli.py) ---------------------------------------------
 def backup_cmd(a):
     return backup(a.db, a.dir, a.keep)
@@ -95,3 +127,7 @@ def backup_cmd(a):
 
 def restore_cmd(a):
     return restore(a.db, a.file, os.getenv("SIA_BASE_URL", "http://127.0.0.1:8000"))
+
+
+def maintenance_cmd(a):
+    return maintenance(a.db)

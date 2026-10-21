@@ -314,3 +314,47 @@ def test_refund_page_and_terms_use_the_same_wording():
     for must in ("don't renew automatically", "within 7 days", "more than 24 hours", "pro rata", "Razorpay",
                  "5 to 7 working days"):
         assert must in text
+
+
+# --- Task 9: retention job --------------------------------------------------------------------------------------
+def test_maintenance_deletes_exactly_the_expired_rows(tmp_path, monkeypatch, capsys):
+    import json
+    import time
+    api, c = make(tmp_path, monkeypatch)
+    st, dev, now, day = api.store, api.dev, time.time(), 86400
+    free, pro, lapsed = (st.create_tenant(n)["tenant_id"] for n in ("free", "pro", "lapsed"))
+    st.set_plan(pro, "pro")
+    st.set_plan(lapsed, "team")
+    st.x("UPDATE tenants SET paid_until=? WHERE id=?", now - day, lapsed)  # team pass ran out: free rules apply
+    projects = {"free": (free, None), "pro": (pro, None), "pro7": (pro, 7), "lapsed": (lapsed, None)}
+    pids = {}
+    for name, (org, days) in projects.items():
+        pids[name] = dev.create_project(org, name, {"retention_days": days} if days else None)["id"]
+        dev.log_runs(org, pids[name], [{"id": f"d{age}", "name": "s", "started": now - age * day}
+                                       for age in (5, 10, 20, 100, 400)])
+
+    for status, age in (("rejected", 91), ("rejected", 89), ("pending", 200), ("approved", 200)):
+        st.x("INSERT INTO access_requests (id, email, name, status, created, decided) VALUES (?,?,?,?,?,?)",
+             f"{status}{age}", f"{status}{age}@example.com", "A", status, now - age * day,
+             None if status == "pending" else now - age * day)
+    for order, status, age in (("o31", "created", 31), ("o29", "created", 29), ("o100", "paid", 100)):
+        st.add_payment(order, pro, "pro", 100, "INR")
+        st.x("UPDATE payments SET status=?, created=? WHERE order_id=?", status, now - age * day, order)
+
+    capsys.readouterr()
+    assert cli.main(["maintenance", "--db", str(tmp_path / "s.db")]) == 0
+    line = json.loads(capsys.readouterr().out)
+    # free: 14 days (20, 100, 400 go); pro: 90 (100, 400); pro with its own 7-day setting: 7 (10, 20, 100, 400);
+    # lapsed team plan: free's 14 days (20, 100, 400)
+    kept = {n: sorted(r["id"] for r in st.q("SELECT id FROM runs WHERE project_id=?", pids[n])) for n in projects}
+    assert kept == {"free": ["d10", "d5"], "pro": ["d10", "d20", "d5"], "pro7": ["d5"], "lapsed": ["d10", "d5"]}
+    assert sorted(r["id"] for r in st.q("SELECT id FROM access_requests")) == ["approved200", "pending200",
+                                                                               "rejected89"]
+    assert sorted(r["order_id"] for r in st.q("SELECT order_id FROM payments")) == ["o100", "o29"]
+    # 3 + 2 + 3 = 8 deleted here: pro7's own 7-day setting already removed its 4 old runs at ingest
+    assert line == {"ts": line["ts"], "event": "maintenance", "runs_deleted": 8,
+                    "rejected_access_requests_deleted": 1, "unpaid_orders_deleted": 1}
+
+    assert cli.main(["maintenance", "--db", str(tmp_path / "s.db")]) == 0  # idempotent
+    again = json.loads(capsys.readouterr().out)
+    assert (again["runs_deleted"], again["rejected_access_requests_deleted"], again["unpaid_orders_deleted"]) == (0, 0, 0)

@@ -248,6 +248,7 @@ sia set-plan      ORG_ID free|pro|team
 sia admin         requests [--status pending] | approve ID | reject ID      (SIA_BASE_URL, SIA_ADMIN_KEY)
 sia backup        [--dir backups] [--keep 14] [--db]     safe online copy + integrity check + retention
 sia restore       FILE [--db]                             server stopped; saves the current DB first
+sia maintenance   [--db]                                  daily retention job; one JSON line of counts
 ```
 
 Common options: `--project` (`SIA_PROJECT`), `--api-key` (`SIA_API_KEY`), `--base-url` (`SIA_BASE_URL`),
@@ -332,7 +333,7 @@ sia admin reject REQUEST_ID
 ```
 
 Send the key to the requester over a private channel. Rejected requests are deleted after 90 days by
-`sia maintenance`.
+`sia maintenance` (run it daily: [`docs/RUNBOOK.md`](docs/RUNBOOK.md)).
 
 **Keys.** `full` keys can do everything in the organization. Give production apps an **`ingest`** key: it can only
 send runs and feedback and read the active prompt. Keys are stored as SHA-256 hashes, can be listed (prefix, scope,
