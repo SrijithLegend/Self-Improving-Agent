@@ -77,3 +77,16 @@ Every place where the spec left room, and what was picked. Change any of these f
 - **Numbers use `en-US` grouping** (250,000) to match the terms and README; prices use `en-IN` currency format.
 - **"Beta pricing"** appears as the paid cards' label and in the sentence under the heading.
 - **`/v1/plans` keeps the API's `no-store` cache header** like every `/v1` route; it's one small request per visit.
+
+## Task 8: refunds
+
+- **Pro rata** means the unavailable time as a share of the 30-day pass (3 days down refunds 3/30), only once the
+  total downtime in the period passes 24 hours. The old terms said "in proportion" without saying of what.
+- **One wording, two pages**: the five policy bullets carry `class="policy"` in both `refund.html` and terms §7, and
+  a test fails if they differ. "Business days" became "working days" in both, as the spec words it.
+- **Refund requests** go to the contact address with the order or payment reference; we promise a reply within
+  7 days. Refunds themselves are issued by hand in the Razorpay dashboard (there's no refund API call in SIA).
+- **The footer link check** fetches every same-site footer link; external links (GitHub, license) aren't fetched in
+  tests, which have no network.
+- **Dashboard**: the refund link sits in the note under the plan cards, next to the pay buttons, and opens in a
+  new tab so an open checkout isn't lost.

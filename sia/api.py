@@ -1025,6 +1025,7 @@ if WEB.is_dir():  # a pip install ships the API without the landing page
 
     @app.api_route("/privacy", methods=["GET", "HEAD"], include_in_schema=False)
     @app.api_route("/terms", methods=["GET", "HEAD"], include_in_schema=False)
+    @app.api_route("/refund", methods=["GET", "HEAD"], include_in_schema=False)
     def legal_page(request: Request):
         return FileResponse(WEB / f"{request.url.path.strip('/')}.html")
 

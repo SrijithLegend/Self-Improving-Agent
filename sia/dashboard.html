@@ -418,7 +418,7 @@ V.billing = async () => {
     <div class="muted">${blurb}</div><ul>${feats(b.plans[k]).map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
     ${k === "free" ? "" : `<button class="${b.plan === k ? "" : "primary"}" data-act="pay" data-plan="${k}" ${b.enabled ? "" : "disabled"}>${b.plan === k ? "Extend 30 days" : "Upgrade to " + name}</button>`}
   </div>`).join("")}</div>
-  <p class="muted mono">Prices are early placeholders and may change. Payments are confirmed with Razorpay before the plan changes.</p>
+  <p class="muted mono">Prices are early placeholders and may change. Payments are confirmed with Razorpay before the plan changes. Passes don't renew on their own. <a href="/refund" target="_blank" rel="noopener">Refund policy</a>.</p>
   <div class="card flush"><h2 class="label">Payment history</h2>${b.payments.length ? `<div class="tbl"><table><tr><th>Date</th><th>Plan</th><th class="num">Amount</th><th>Status</th><th>Reference</th></tr>
     ${b.payments.map((p) => `<tr><td>${when(p.created)}</td><td style="text-transform:capitalize">${esc(p.plan)}</td><td class="num">${money(p.amount)}</td><td>${pill(p.status, p.status === "paid" ? "good" : "warn")}</td><td class="mono muted">${esc(p.payment_id || p.order_id)}</td></tr>`).join("")}</table></div>` : `<div class="empty" style="margin:12px">No payments yet.</div>`}</div>`;
 };

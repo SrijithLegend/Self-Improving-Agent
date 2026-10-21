@@ -285,3 +285,32 @@ def test_landing_page_static_pricing_matches_plans(tmp_path, monkeypatch):
         assert f'data-plan="{name}"' in html
         assert f"{lim['runs_per_month']:,} runs a month" in html and f"{lim['retention_days']}-day run history" in html
     assert "Most popular" not in html and "per 30 days" in html and "beta prices" in html
+
+
+# --- Task 8: refund page ----------------------------------------------------------------------------------------
+WEB = Path(__file__).resolve().parents[1] / "web"
+
+
+def test_every_footer_link_resolves(tmp_path, monkeypatch):
+    import re
+    api, c = make(tmp_path, monkeypatch)
+    pages = sorted(WEB.glob("*.html"))
+    assert "refund.html" in [p.name for p in pages]
+    for page in pages:
+        footer = page.read_text(encoding="utf-8").split("<footer", 1)[1]
+        hrefs = re.findall(r'href="([^"]+)"', footer)
+        assert "/refund" in hrefs and "/privacy" in hrefs and "/terms" in hrefs, page.name
+        for href in hrefs:
+            if href.startswith("/"):  # external links (GitHub) aren't fetched in tests
+                assert c.get(href).status_code == 200, (page.name, href)
+
+
+def test_refund_page_and_terms_use_the_same_wording():
+    import re
+    policy = lambda name: re.findall(r'<li class="policy">(.*?)</li>', (WEB / name).read_text(encoding="utf-8"))  # noqa: E731
+    refund = policy("refund.html")
+    assert len(refund) == 5 and refund == policy("terms.html")
+    text = " ".join(refund)
+    for must in ("don't renew automatically", "within 7 days", "more than 24 hours", "pro rata", "Razorpay",
+                 "5 to 7 working days"):
+        assert must in text

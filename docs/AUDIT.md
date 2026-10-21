@@ -57,6 +57,7 @@ rules are tested, but these must be addressed before hosting paying customers:
 **Product**
 - Prices and plan limits are hypotheses. Razorpay is integrated (orders, checkout verification, signed webhooks,
   30-day passes), tested against a fake Razorpay only; it has not yet been run against a real Razorpay account.
-  No recurring subscriptions, refunds or GST invoicing.
+  No recurring subscriptions or GST invoicing. ~~No refund policy.~~ Done (Task 8): `web/refund.html`, the same
+  wording as terms section 7; refunds are issued by hand from the Razorpay dashboard.
 - Only a synchronous Python SDK. No async support, no framework adapters (LangChain, LlamaIndex, ...).
 - The gate can only protect behaviour that the developer's dataset and target function exercise.
