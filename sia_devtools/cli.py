@@ -10,7 +10,10 @@ import importlib.util
 import json
 import os
 import sys
+import time
 from pathlib import Path
+
+import httpx
 
 from .client import SIAClient
 from .errors import SIAError
@@ -233,6 +236,44 @@ def cmd_set_plan(a):
     return 0 if ok else 4
 
 
+def admin_request(method, path):
+    """Call the hosted server's admin API with SIA_ADMIN_KEY. Returns the JSON body; exits with code 4 on errors."""
+    key = os.getenv("SIA_ADMIN_KEY", "")
+    if not key:
+        raise SIAError("set SIA_ADMIN_KEY (and SIA_BASE_URL for a remote server)")
+    url = os.getenv("SIA_BASE_URL", "http://127.0.0.1:8000").rstrip("/") + path
+    try:
+        r = httpx.request(method, url, headers={"X-Admin-Key": key}, timeout=30)
+    except httpx.HTTPError as e:
+        raise SIAError(f"could not reach {url} ({type(e).__name__})")
+    if r.status_code >= 400:
+        try:
+            detail = r.json().get("detail")
+        except ValueError:
+            detail = r.text[:200]
+        raise SIAError(f"{r.status_code}: {detail}")
+    return r.json()
+
+
+def cmd_admin(a):
+    if a.action == "requests":
+        rows = admin_request("GET", "/v1/admin/access-requests" + (f"?status={a.status}" if a.status else ""))
+        for r in rows:
+            say(f"{r['id']}  {r['status']:<9} {time.strftime('%Y-%m-%d', time.gmtime(r['created']))}  {r['email']}  "
+                f"{r['name']}" + (f" ({r['company']})" if r["company"] else "") +
+                (f"\n    {r['use_case'][:200]}" if r["use_case"] else ""))
+        say(f"{len(rows)} request(s)")
+        return 0
+    r = admin_request("POST", f"/v1/admin/access-requests/{a.request_id}/{a.action}")
+    if a.action == "reject":
+        say(f"request {a.request_id}: rejected")
+    else:
+        say(f"request {a.request_id}: approved", f"organization {r['org_name']} ({r['org_id']})",
+            f"api key        {r['api_key']}", "", f"Send this key to {r['email']} over a private channel. "
+            "It is shown only once and can't be read back; rotate it if it leaks.")
+    return 0
+
+
 # --- argument parsing ------------------------------------------------------------
 def parser():
     common = argparse.ArgumentParser(add_help=False)
@@ -327,6 +368,11 @@ def parser():
     sp.add_argument("org_id")
     sp.add_argument("plan", choices=["free", "pro", "team"])
     sp.set_defaults(fn=cmd_set_plan)
+    ad = sub.add_parser("admin", help="access requests on a hosted server (uses SIA_BASE_URL and SIA_ADMIN_KEY)")
+    ad.add_argument("action", choices=["requests", "approve", "reject"])
+    ad.add_argument("request_id", nargs="?")
+    ad.add_argument("--status", choices=["pending", "approved", "rejected"])
+    ad.set_defaults(fn=cmd_admin)
     return p
 
 
@@ -344,6 +390,8 @@ def main(argv=None):
         p.error("versions create needs --file")
     if a.cmd == "runs" and a.action == "show" and not a.run_id:
         p.error("runs show needs a run id")
+    if a.cmd == "admin" and a.action != "requests" and not a.request_id:
+        p.error(f"admin {a.action} needs a request id (see: sia admin requests)")
     if a.cmd == "feedback" and a.action == "review" and (not a.feedback_id or a.verify == a.reject):
         p.error("feedback review needs an id and exactly one of --verify / --reject")
     try:

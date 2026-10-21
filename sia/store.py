@@ -53,6 +53,11 @@ CREATE TABLE IF NOT EXISTS payments (order_id TEXT PRIMARY KEY, org_id TEXT NOT 
     amount INTEGER NOT NULL, currency TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created', payment_id TEXT,
     created REAL, paid REAL);
 CREATE INDEX IF NOT EXISTS idx_payments_org ON payments(org_id, created)
+"""), ("legacy-003-access-requests", """
+CREATE TABLE IF NOT EXISTS access_requests (id TEXT PRIMARY KEY, email TEXT NOT NULL, name TEXT NOT NULL,
+    company TEXT NOT NULL DEFAULT '', use_case TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
+    org_id TEXT, created REAL NOT NULL, decided REAL);
+CREATE INDEX IF NOT EXISTS idx_access_requests ON access_requests(status, email)
 """)]
 PAID_PERIOD_DAYS = 30  # one payment buys this many days of a paid plan
 
@@ -212,6 +217,35 @@ class Store:
         self.x("UPDATE api_keys SET last_used=? WHERE id=? AND (last_used IS NULL OR last_used<?)",
                now, rows[0]["key_id"], now - 60)
         return rows[0]
+
+    # --- access requests (manual onboarding) ---------------------------------
+    def add_access_request(self, email, name, company="", use_case=""):
+        """Store a request unless the same email already has one pending. Returns True if a row was added."""
+        email = email.strip().lower()
+        with self._conn() as c:
+            if c.execute("SELECT 1 FROM access_requests WHERE email=? AND status='pending'", (email,)).fetchone():
+                return False
+            c.execute("INSERT INTO access_requests (id, email, name, company, use_case, created) VALUES (?,?,?,?,?,?)",
+                      (uuid.uuid4().hex, email, name.strip(), company.strip(), use_case.strip(), time.time()))
+        return True
+
+    def access_requests(self, status=None, limit=500):
+        return self.q("SELECT * FROM access_requests" + (" WHERE status=?" if status else "") +
+                      " ORDER BY created LIMIT ?", *([status] if status else []), limit)
+
+    def decide_access_request(self, request_id, approve):
+        """pending -> approved (creates the organization and its first full-scope key) | rejected. Returns None if
+        the request is missing or was already decided, so an approval can never create two organizations."""
+        if not self.n("UPDATE access_requests SET status=?, decided=? WHERE id=? AND status='pending'",
+                      "approved" if approve else "rejected", time.time(), request_id):
+            return None
+        if not approve:
+            return {"id": request_id, "status": "rejected"}
+        r = self.q("SELECT * FROM access_requests WHERE id=?", request_id)[0]
+        org = self.create_tenant(r["company"] or r["name"])
+        self.x("UPDATE access_requests SET org_id=? WHERE id=?", org["tenant_id"], request_id)
+        return {"id": request_id, "status": "approved", "email": r["email"], "org_id": org["tenant_id"],
+                "org_name": org["name"], "api_key": org["api_key"]}  # the key is shown only once
 
     # --- agents --------------------------------------------------------------
     def create_agent(self, tenant_id, name, domain, instructions="", rubric=""):

@@ -226,14 +226,45 @@
     });
   });
 
-  // --- hosted waitlist: mailto only, nothing is sent from this page --------------------------------
-  $("#notify").addEventListener("submit", function (e) {
+  // --- request access: posts to /v1/access-requests (same origin, no third party) -----------------
+  var form = $("#access-form"), status = $("#access-status"), send = $(".access-send", form);
+  function fieldError(input, msg) {
+    var err = document.getElementById(input.id + "-err");
+    if (!err) return;
+    err.textContent = msg || ""; err.hidden = !msg;
+    if (msg) input.setAttribute("aria-invalid", "true"); else input.removeAttribute("aria-invalid");
+  }
+  function say(msg, kind) { status.textContent = msg; status.setAttribute("data-kind", kind || ""); }
+  form.addEventListener("submit", function (e) {
     e.preventDefault();
-    var email = $("#notify-email").value.trim();
-    // the recipient comes from <body data-contact>; empty leaves the To: field for the visitor to fill in
-    location.href = "mailto:" + encodeURIComponent(document.body.getAttribute("data-contact") || "") +
-      "?subject=" + encodeURIComponent("SIA hosted: notify me") +
-      "&body=" + encodeURIComponent("Please let me know when hosted SIA opens.\n\nMy email: " + email);
+    var bad = null;
+    ["#access-email", "#access-name"].forEach(function (s) {
+      var input = $(s), v = input.value.trim(), msg = "";
+      if (!v) msg = s === "#access-email" ? "Enter your email address." : "Enter your name.";
+      else if (!input.checkValidity()) msg = "Enter an email address like name@company.com.";
+      fieldError(input, msg);
+      if (msg && !bad) bad = input;
+    });
+    if (bad) { say("Check the highlighted fields.", "error"); bad.focus(); return; }
+    send.disabled = true; send.textContent = "Sending…"; say("");
+    var body = {};
+    ["email", "name", "company", "use_case", "website"].forEach(function (k) { body[k] = form.elements[k].value.trim(); });
+    fetch("/v1/access-requests", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+      .then(function (r) {
+        if (r.status === 202) {
+          form.reset();
+          say("Thanks. We have your request and will reply by email.", "ok");
+        } else if (r.status === 429) {
+          say("Too many requests from your network. Please try again in an hour.", "error");
+        } else if (r.status === 422) {
+          say("Some details weren't accepted. Check the email address and the length of each field.", "error");
+        } else {
+          say("Something went wrong on our side (" + r.status + "). Please try again later.", "error");
+        }
+      }, function () {
+        say("Your request wasn't sent. Check your connection and try again.", "error");
+      })
+      .then(function () { send.disabled = false; send.textContent = "Request access"; });
   });
 
   // --- scroll-spy ----------------------------------------------------------------------------------

@@ -39,9 +39,20 @@
       never reach us.</li>
     <li>The fonts load from Google Fonts. To send them, Google receives your IP address and browser details, under
       <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google's privacy policy<span class="sr"> (opens in a new tab)</span></a>.</li>
-    <li>The "Notify me" form only opens your email app with a message addressed to us. The page itself stores and
-      sends nothing. If you send the email, we keep your address only to tell you when the hosted service opens,
-      and delete it if you ask.</li>
+    <li>The "Request access" form sends what you type to our server. The next section explains what happens to it.</li>
+  </ul>
+
+  <h2 id="access-requests">The Request access form</h2>
+  <ul>
+    <li><strong>What we collect:</strong> your email address and name, and if you give them, your company and what you'd
+      use SIA for. A hidden field that only bots fill in is checked and then discarded. Your IP address is counted in
+      memory for up to an hour to limit abuse, and is not stored with your request.</li>
+    <li><strong>Why:</strong> to decide on your request, reply to you, and set up your organization if we approve it.
+      We don't use it for marketing and don't share it with anyone.</li>
+    <li><strong>How long:</strong> a pending request is kept until we decide. An approved request is kept with your
+      account until you close it. A rejected request is deleted 90 days after the decision.</li>
+    <li><strong>Deleting it:</strong> write to <a data-contact-link data-contact-show href="https://github.com/SrijithLegend/Self-Improving-Agent/issues">us</a>
+      from the same email address and we delete your request within 30 days.</li>
   </ul>
 
   <h2>The hosted service: what we store</h2>
@@ -50,6 +61,7 @@
       <caption id="t-store">Everything the hosted service keeps about you, and why.</caption>
       <thead><tr><th scope="col">Data</th><th scope="col">Why</th><th scope="col">How long</th></tr></thead>
       <tbody>
+        <tr><th scope="row">Access requests: email, name, company and use case</th><td>To answer the request and set up your organization</td><td>Pending: until decided. Approved: until you close the account. Rejected: 90 days after the decision.</td></tr>
         <tr><th scope="row">Organization name, plan and plan expiry</th><td>To run your account and apply your plan's limits</td><td>Until you close the account</td></tr>
         <tr><th scope="row">Your SIA API keys, stored only as a SHA-256 hash and a short prefix</th><td>To check who is calling. We can't read your keys back.</td><td>Until you revoke them or close the account</td></tr>
         <tr><th scope="row">What your app sends: runs (inputs, outputs, timings, errors), feedback, datasets, evaluations and prompt versions</th><td>To show them in the dashboard and run the evaluations you ask for</td><td>Runs: 14, 90 or 365 days depending on plan, or less if you set a shorter retention. The rest: until you delete it.</td></tr>

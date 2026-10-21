@@ -44,6 +44,7 @@ RATE_LIMIT = sec.env_int("SIA_RATE_LIMIT", 120)  # requests per organization per
 org_hits = sec.Window(RATE_LIMIT, 60)
 ip_hits = sec.Window(sec.env_int("SIA_IP_RATE_LIMIT", 600), 60)  # requests per client IP per minute
 auth_fails = sec.Window(sec.env_int("SIA_AUTH_FAIL_LIMIT", 20), 600)  # bad keys per IP per 10 min, then 429
+access_hits = sec.Window(5, 3600)  # access requests per client IP per hour
 llm_slots = sec.Slots(sec.env_int("SIA_LLM_CONCURRENCY_PER_ORG", 2), sec.env_int("SIA_LLM_CONCURRENCY", 16))
 log, seclog = logging.getLogger("sia.access"), logging.getLogger("sia.security")
 DASHBOARD = Path(__file__).with_name("dashboard.html")
@@ -222,6 +223,15 @@ def call(fn, *args, **kwargs):
 # --- request bodies: managed agents -------------------------------------------
 class TenantIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+
+
+class AccessRequestIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    email: str = Field(max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    name: str = Field(max_length=200, pattern=r"\S")
+    company: str = Field("", max_length=200)
+    use_case: str = Field("", max_length=2000)
+    website: str = Field("", max_length=500, description="Leave empty. It's hidden on the form: bots fill it in.")
 
 
 class AgentIn(BaseModel):
@@ -457,6 +467,39 @@ def set_plan(org_id: str, body: PlanIn, request: Request, x_admin_key: str = Hea
     if not store.set_plan(org_id, body.plan):
         raise HTTPException(404, "Organization not found.")
     return {"org_id": org_id, "plan": body.plan, "limits": PLANS[body.plan]}
+
+
+# --- access requests: manual onboarding until there is self-serve signup ----------------
+@app.post("/v1/access-requests", status_code=202)
+def request_access(body: AccessRequestIn, request: Request):
+    """Ask for hosted access. The answer is always the same, so it never reveals whether an email is already known."""
+    if retry := access_hits.retry_after(client_ip(request)):
+        raise sec.too_many(retry, "Too many access requests from this address; try again later.")
+    if body.website:  # the hidden honeypot field: a bot filled it in, so store nothing
+        security_event(request, "access_request_honeypot")
+    else:
+        store.add_access_request(body.email, body.name, body.company, body.use_case)
+    return {"status": "received"}
+
+
+@app.get("/v1/admin/access-requests")
+def list_access_requests(request: Request, status: Literal["pending", "approved", "rejected"] | None = None,
+                         x_admin_key: str = Header(default="")):
+    require_admin(request, x_admin_key)
+    security_event(request, "access_requests_listed", status=status)
+    return store.access_requests(status)
+
+
+@app.post("/v1/admin/access-requests/{request_id}/{decision}")
+def decide_access_request(request_id: str, decision: Literal["approve", "reject"], request: Request,
+                          x_admin_key: str = Header(default="")):
+    """approve creates the organization and a full-scope key, returned once; reject only marks the request."""
+    require_admin(request, x_admin_key)
+    r = store.decide_access_request(request_id, decision == "approve")
+    if not r:
+        raise HTTPException(404, "No pending access request with that id.")
+    security_event(request, f"access_request_{r['status']}", access_request=request_id, org_id=r.get("org_id"))
+    return r
 
 
 # --- billing (Razorpay) ------------------------------------------------------------

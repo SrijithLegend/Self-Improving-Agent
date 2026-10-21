@@ -79,6 +79,7 @@
           <li><a href="#gate">CI gate</a></li>
           <li><a href="#results">Results</a></li>
           <li><a href="#pricing">Pricing</a></li>
+          <li><a href="#access">Request access</a></li>
         </ul>
       </nav>
     </div>
@@ -349,16 +350,47 @@ python examples/devtools_demo.py             <span class="c"># real Gemini model
           <span class="step">Hosted</span>
           <h3>Public beta</h3>
           <p>We run the server, the dashboard and the database for you. Access is by request while we onboard the
-            first teams by hand. Leave your email and we'll write when there's a place; this opens your mail app and
-            nothing is stored on this page.</p>
-          <form class="notify" id="notify">
-            <label for="notify-email" class="sr">Email address</label>
-            <input id="notify-email" name="email" type="email" required autocomplete="email" placeholder="you@company.com">
-            <button type="submit">Notify me</button>
-          </form>
-          <p class="notify-note">How we handle your address: <a href="/privacy">privacy policy</a>.</p>
+            first teams by hand.</p>
+          <p class="card-link"><a href="#access">Request access</a></p>
         </div>
       </div>
+    </section>
+
+    <section id="access" aria-labelledby="h-access">
+      <h2 id="h-access">Request access</h2>
+      <p>The hosted service is in public beta, and we set up each team by hand. Tell us a little about what you're
+        building and we'll reply by email. Self-hosting needs no request: the Quickstart above is all of it.</p>
+      <form class="access" id="access-form" novalidate>
+        <div class="field">
+          <label for="access-email">Work email</label>
+          <input id="access-email" name="email" type="email" required maxlength="254" autocomplete="email" aria-describedby="access-email-err">
+          <p class="field-err" id="access-email-err" hidden></p>
+        </div>
+        <div class="field">
+          <label for="access-name">Your name</label>
+          <input id="access-name" name="name" type="text" required maxlength="200" autocomplete="name" aria-describedby="access-name-err">
+          <p class="field-err" id="access-name-err" hidden></p>
+        </div>
+        <div class="field">
+          <label for="access-company">Company <span class="opt">(optional)</span></label>
+          <input id="access-company" name="company" type="text" maxlength="200" autocomplete="organization">
+        </div>
+        <div class="field wide">
+          <label for="access-use">What you'd use it for <span class="opt">(optional)</span></label>
+          <textarea id="access-use" name="use_case" rows="4" maxlength="2000" aria-describedby="access-use-hint"></textarea>
+          <p class="hint" id="access-use-hint">For example: the app, the model you use and what goes wrong today. Please don't include personal data about your users.</p>
+        </div>
+        <div class="hp" aria-hidden="true">
+          <label for="access-website">Leave this empty</label>
+          <input id="access-website" name="website" type="text" tabindex="-1" autocomplete="off">
+        </div>
+        <div class="field wide">
+          <button type="submit" class="access-send">Request access</button>
+          <p class="form-status" id="access-status" role="status"></p>
+        </div>
+      </form>
+      <p class="notify-note">We keep these details only to answer your request. How long, and how to have them deleted:
+        <a href="/privacy#access-requests">privacy policy</a>.</p>
     </section>
   </div>
 

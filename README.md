@@ -245,6 +245,7 @@ sia dashboard     [--db sia_local.db]        local mode UI, 127.0.0.1 only
 sia serve         [--host] [--port]           hosted API + dashboard
 sia create-org    NAME                        prints the organization's first key (shown once)
 sia set-plan      ORG_ID free|pro|team
+sia admin         requests [--status pending] | approve ID | reject ID      (SIA_BASE_URL, SIA_ADMIN_KEY)
 ```
 
 Common options: `--project` (`SIA_PROJECT`), `--api-key` (`SIA_API_KEY`), `--base-url` (`SIA_BASE_URL`),
@@ -317,6 +318,20 @@ you if something failed). Transient failures (network, 429, 5xx) are kept and re
 quota, invalid data) are dropped with a logged warning instead of retrying forever. Your app's own exceptions are
 never swallowed.
 
+**Onboarding (public beta).** There is no self-serve signup yet. Visitors use the **Request access** form on the
+landing page (`POST /v1/access-requests`: public, 5 per IP per hour, a hidden honeypot field, and the same `202`
+answer whether or not the email is known). You review the queue and approve or reject from a shell:
+
+```bash
+export SIA_BASE_URL=https://sia.example.com SIA_ADMIN_KEY=...
+sia admin requests --status pending
+sia admin approve REQUEST_ID     # creates the organization and prints its first full-scope key, once
+sia admin reject REQUEST_ID
+```
+
+Send the key to the requester over a private channel. Rejected requests are deleted after 90 days by
+`sia maintenance`.
+
 **Keys.** `full` keys can do everything in the organization. Give production apps an **`ingest`** key: it can only
 send runs and feedback and read the active prompt. Keys are stored as SHA-256 hashes, can be listed (prefix, scope,
 last used), revoked and rotated.
@@ -345,6 +360,8 @@ All under `/v1`, `Authorization: Bearer <key>`. Lists take `limit`/`offset` and 
 | `POST/GET /projects/{p}/versions`, `GET /versions/active?name=` | full / any | candidates; the active version is readable with ingest keys |
 | `POST /versions/{name}/{v}/approve`, `/reject`, `/activate` | full | release steps |
 | `POST /tenants`, `POST /admin/orgs/{id}/plan` | admin key | create organizations, change plans (payment webhook boundary) |
+| `POST /access-requests` | none | ask for hosted access (rate-limited, always `202`) |
+| `GET /admin/access-requests?status=`, `POST /admin/access-requests/{id}/approve`, `/reject` | admin key | review the queue; approve creates the organization and returns its key once |
 | `GET /health` | none | liveness and database check |
 
 Errors: `400` invalid, `401` bad or revoked key, `402` plan limit, `403` wrong scope, `404` not found (including
