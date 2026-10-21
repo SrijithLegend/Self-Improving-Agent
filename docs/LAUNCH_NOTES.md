@@ -129,3 +129,9 @@ Every place where the spec left room, and what was picked. Change any of these f
   there, so they're described in the README instead.
 - **`.gitignore`** got `backups/` in Task 6, when `sia backup` started writing there by default.
 - **`SPEC.md`** still names `phase1/` in its original file list; it's the historical spec and was left as written.
+
+## Found along the way
+
+- **`sia` now reads the `.env` in the directory it runs from.** It used to search from the installed package's
+  folder, so `cd /srv/sia && sia backup` from cron would have ignored the server's `.env`. Found while running
+  `sia doctor` against a sample `.env`; covered by `test_cli_reads_the_env_file_where_it_runs`.

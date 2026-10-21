@@ -405,8 +405,8 @@ def parser():
 
 def main(argv=None):
     try:
-        from dotenv import load_dotenv
-        load_dotenv()
+        from dotenv import find_dotenv, load_dotenv
+        load_dotenv(find_dotenv(usecwd=True))  # the .env where `sia` runs, not next to this file
     except ImportError:
         pass
     p = parser()

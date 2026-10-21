@@ -421,3 +421,15 @@ def test_doctor_db_and_backup_failures(tmp_path, monkeypatch):
     from sia import ops
     assert dict((c, lv) for lv, c, _ in ops.doctor(str(tmp_path / "missing.db"), str(tmp_path / "none")))["DB"] == "FAIL"
     assert dict((c, lv) for lv, c, _ in ops.doctor(str(tmp_path / "missing.db"), str(tmp_path / "none")))["Backups"] == "FAIL"
+
+
+def test_cli_reads_the_env_file_where_it_runs(tmp_path, monkeypatch):
+    # operators run `cd /srv/sia && sia backup` from cron: the .env there must be read
+    from sia.store import Store
+    Store(str(tmp_path / "from-env.db"))
+    (tmp_path / ".env").write_text("SIA_DB=from-env.db\n", encoding="utf-8")
+    monkeypatch.setenv("SIA_DB", "unset")  # recorded, so the value dotenv writes is undone after the test
+    monkeypatch.delenv("SIA_DB")
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["backup", "--dir", "b"]) == 0
+    assert len(list((tmp_path / "b").glob("sia-*.db"))) == 1
