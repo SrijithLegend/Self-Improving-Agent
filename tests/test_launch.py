@@ -358,3 +358,66 @@ def test_maintenance_deletes_exactly_the_expired_rows(tmp_path, monkeypatch, cap
     assert cli.main(["maintenance", "--db", str(tmp_path / "s.db")]) == 0  # idempotent
     again = json.loads(capsys.readouterr().out)
     assert (again["runs_deleted"], again["rejected_access_requests_deleted"], again["unpaid_orders_deleted"]) == (0, 0, 0)
+
+
+# --- Task 10: sia doctor ----------------------------------------------------------------------------------------
+READY = {"SIA_ADMIN_KEY": ADMIN, "SIA_ALLOWED_HOSTS": "sia.example.com", "SIA_TRUSTED_PROXIES": "10.0.0.2",
+         "SIA_CONTACT_EMAIL": "hello@example.com", "RAZORPAY_KEY_ID": "rzp_live_abc", "RAZORPAY_KEY_SECRET": "s",
+         "RAZORPAY_WEBHOOK_SECRET": "w", "SIA_PRICE_PRO_PAISE": "149900", "SIA_PRICE_TEAM_PAISE": "599900"}
+
+
+def ready(tmp_path, monkeypatch, **override):
+    for k in ("SIA_LOCAL_MODE", *READY):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in {**READY, **override}.items():
+        if v is not None:
+            monkeypatch.setenv(k, v)
+    db = tmp_path / "s.db"
+    if not db.exists():
+        from sia.store import Store
+        Store(str(db))
+        assert cli.main(["backup", "--db", str(db), "--dir", str(tmp_path / "b")]) == 0
+    from sia import ops
+    return {check: level for level, check, _ in ops.doctor(str(db), str(tmp_path / "b"))}
+
+
+def test_doctor_all_pass_when_fully_configured(tmp_path, monkeypatch, capsys):
+    assert set(ready(tmp_path, monkeypatch).values()) == {"PASS"}
+    assert cli.main(["doctor", "--db", str(tmp_path / "s.db"), "--backup-dir", str(tmp_path / "b")]) == 0
+    assert "0 FAIL, 0 WARN" in capsys.readouterr().out
+
+
+def test_doctor_each_fail(tmp_path, monkeypatch, capsys):
+    cases = {"SIA_ADMIN_KEY": {"SIA_ADMIN_KEY": None}, "SIA_CONTACT_EMAIL": {"SIA_CONTACT_EMAIL": None},
+             "SIA_ALLOWED_HOSTS": {"SIA_ALLOWED_HOSTS": None}, "RAZORPAY_WEBHOOK_SECRET": {"RAZORPAY_WEBHOOK_SECRET": None},
+             "Razorpay keys": {"RAZORPAY_KEY_SECRET": None}}
+    for check, override in cases.items():
+        r = ready(tmp_path, monkeypatch, **override)
+        assert r[check] == "FAIL" and [c for c, lv in r.items() if lv != "PASS"] == [check], check
+    assert ready(tmp_path, monkeypatch, SIA_ADMIN_KEY="admin")["SIA_ADMIN_KEY"] == "FAIL"  # weak
+    capsys.readouterr()
+    assert cli.main(["doctor", "--db", str(tmp_path / "s.db"), "--backup-dir", str(tmp_path / "b")]) == 1
+    assert "FAIL  SIA_ADMIN_KEY" in capsys.readouterr().out  # the weak key from the line above
+
+
+def test_doctor_warnings(tmp_path, monkeypatch):
+    r = ready(tmp_path, monkeypatch, RAZORPAY_KEY_ID="rzp_test_abc", SIA_TRUSTED_PROXIES=None,
+              SIA_PRICE_PRO_PAISE=None, SIA_PRICE_TEAM_PAISE=None)
+    assert (r["Razorpay keys"], r["SIA_TRUSTED_PROXIES"], r["Prices"]) == ("WARN", "WARN", "WARN")
+    assert "FAIL" not in r.values()
+    assert ready(tmp_path, monkeypatch, SIA_ALLOWED_HOSTS=None, SIA_LOCAL_MODE="1")["SIA_ALLOWED_HOSTS"] == "WARN"
+
+
+def test_doctor_db_and_backup_failures(tmp_path, monkeypatch):
+    import os
+    import time
+    ready(tmp_path, monkeypatch)
+    [b] = (tmp_path / "b").glob("*.db")
+    old = time.time() - 27 * 3600
+    os.utime(b, (old, old))
+    assert ready(tmp_path, monkeypatch)["Backups"] == "FAIL"  # newest backup is older than 26 hours
+    (tmp_path / "s.db").write_bytes(b"not a database" * 100)
+    assert ready(tmp_path, monkeypatch)["DB"] == "FAIL"
+    from sia import ops
+    assert dict((c, lv) for lv, c, _ in ops.doctor(str(tmp_path / "missing.db"), str(tmp_path / "none")))["DB"] == "FAIL"
+    assert dict((c, lv) for lv, c, _ in ops.doctor(str(tmp_path / "missing.db"), str(tmp_path / "none")))["Backups"] == "FAIL"

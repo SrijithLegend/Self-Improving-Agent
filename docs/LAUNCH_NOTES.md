@@ -100,3 +100,16 @@ Every place where the spec left room, and what was picked. Change any of these f
 - **Unpaid orders** are `created`-status payments older than 30 days from creation.
 - **One transaction** for the whole job; the JSON line has `runs_deleted`, `rejected_access_requests_deleted` and
   `unpaid_orders_deleted`.
+
+## Task 10: sia doctor
+
+- **Exit code 1** on any FAIL (the CLI's "check failed" code, like a failed gate); WARNs alone exit 0.
+- **`SIA_TRUSTED_PROXIES` unset is always a WARN**: the server can't tell from config alone whether it's behind a
+  proxy, and the default trusts only a proxy on 127.0.0.1.
+- **"Local mode"** for the `SIA_ALLOWED_HOSTS` check means `SIA_LOCAL_MODE=1`.
+- **Razorpay keys** FAIL unless both the id and the secret are set; live keys are anything not starting `rzp_test_`.
+- **DB writable** is checked by taking SQLite's write lock (`BEGIN IMMEDIATE`) and rolling back, so it changes
+  nothing. A missing file is a FAIL rather than creating an empty database.
+- **Backup age** uses file modification time in `--backup-dir` (default `backups`), counting only `sia backup`'s
+  file names.
+- **Placeholder prices** WARN when either paid price equals the built-in default (199900 / 799900 paise).

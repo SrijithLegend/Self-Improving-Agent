@@ -22,6 +22,16 @@ environment.
    database doesn't survive losing that disk. For continuous replication, see `examples/deploy/litestream.yml`.
 4. Once a month, do a restore drill on another machine (below) and check the row counts look right.
 
+## Before launch, and after any config change
+
+```bash
+sia doctor --backup-dir /data/backups
+```
+
+One PASS / WARN / FAIL line per check (admin key, allowed hosts, trusted proxies, contact email, Razorpay keys and
+webhook secret, database writable and intact, a backup from the last 26 hours, real prices). It exits 1 on any
+FAIL. Test-mode Razorpay keys and placeholder prices are WARN: fine for the beta, not for live payments.
+
 ## Daily maintenance
 
 `sia maintenance` deletes what has outlived its retention, including in idle projects:

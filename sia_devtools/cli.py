@@ -397,6 +397,9 @@ def parser():
     m = sub.add_parser("maintenance", parents=[db], help="delete expired runs, old rejected access requests, "
                                                          "unpaid orders (run daily)")
     m.set_defaults(fn=ops("maintenance_cmd"))
+    dr = sub.add_parser("doctor", parents=[db], help="launch readiness: PASS / WARN / FAIL per check, exit 1 on any FAIL")
+    dr.add_argument("--backup-dir", default="backups")
+    dr.set_defaults(fn=ops("doctor_cmd"))
     return p
 
 

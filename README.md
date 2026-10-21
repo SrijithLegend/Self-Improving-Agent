@@ -249,6 +249,7 @@ sia admin         requests [--status pending] | approve ID | reject ID      (SIA
 sia backup        [--dir backups] [--keep 14] [--db]     safe online copy + integrity check + retention
 sia restore       FILE [--db]                             server stopped; saves the current DB first
 sia maintenance   [--db]                                  daily retention job; one JSON line of counts
+sia doctor        [--db] [--backup-dir backups]           launch readiness: PASS / WARN / FAIL, exit 1 on a FAIL
 ```
 
 Common options: `--project` (`SIA_PROJECT`), `--api-key` (`SIA_API_KEY`), `--base-url` (`SIA_BASE_URL`),
