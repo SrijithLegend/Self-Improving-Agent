@@ -181,3 +181,85 @@ def test_head_requests_answer_200_with_the_same_csp(tmp_path, monkeypatch):
         assert head.status_code == get.status_code == 200, path
         assert head.headers["content-security-policy"] == get.headers["content-security-policy"], path
         assert head.content == b"", path
+
+
+# --- Task 6: backup and restore ---------------------------------------------------------------------------------
+def populated_db(tmp_path, monkeypatch):
+    api, c = make(tmp_path, monkeypatch)
+    org = api.store.create_tenant("Acme")
+    h = {"Authorization": f"Bearer {org['api_key']}"}
+    pid = c.post("/v1/projects", json={"name": "p"}, headers=h).json()["id"]
+    c.post(f"/v1/projects/{pid}/runs", json={"runs": [{"id": f"r{i}", "name": "s"} for i in range(30)]}, headers=h)
+    ask(c)
+    return api, c, h, pid
+
+
+def row_counts(path):
+    import sqlite3
+    with sqlite3.connect(path) as conn:
+        tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}  # table names come from sqlite_master
+
+
+def test_backup_restores_to_identical_row_counts(tmp_path, monkeypatch):
+    api, c, h, pid = populated_db(tmp_path, monkeypatch)
+    db, out = str(tmp_path / "s.db"), tmp_path / "backups"
+    before = row_counts(db)
+    assert before["runs"] == 30 and before["access_requests"] == 1
+    assert cli.main(["backup", "--db", db, "--dir", str(out)]) == 0
+    [copy] = list(out.glob("sia-*.db"))
+
+    c.post(f"/v1/projects/{pid}/runs", json={"runs": [{"id": "late", "name": "s"}]}, headers=h)  # written after
+    assert row_counts(db)["runs"] == 31
+    monkeypatch.setenv("SIA_BASE_URL", "http://127.0.0.1:9")  # nothing listens there: the server is stopped
+    assert cli.main(["restore", "--db", db, str(copy)]) == 0
+    assert row_counts(db) == before
+    [safety] = list(tmp_path.glob("s-before-restore-*.db"))
+    assert row_counts(safety)["runs"] == 31
+
+
+def test_restore_refuses_while_a_server_answers(tmp_path, monkeypatch):
+    api, c, h, pid = populated_db(tmp_path, monkeypatch)
+    db = str(tmp_path / "s.db")
+    assert cli.main(["backup", "--db", db, "--dir", str(tmp_path / "b")]) == 0
+    [copy] = list((tmp_path / "b").glob("*.db"))
+    from sia import ops
+    monkeypatch.setattr(ops, "server_reachable", lambda url: True)
+    before = row_counts(db)
+    c.post(f"/v1/projects/{pid}/runs", json={"runs": [{"id": "late", "name": "s"}]}, headers=h)
+    assert cli.main(["restore", "--db", db, str(copy)]) == 4
+    assert row_counts(db)["runs"] == before["runs"] + 1  # untouched
+    assert not list(tmp_path.glob("s-before-restore-*.db"))
+
+
+def test_backup_keeps_exactly_the_newest_n(tmp_path, monkeypatch):
+    populated_db(tmp_path, monkeypatch)
+    out = tmp_path / "backups"
+    out.mkdir()
+    old = [out / f"sia-2026010{d}-000000.db" for d in range(1, 6)]
+    for p in old:
+        p.write_bytes(b"")
+    (out / "notes.db").write_bytes(b"")  # not a backup name: never touched
+    assert cli.main(["backup", "--db", str(tmp_path / "s.db"), "--dir", str(out), "--keep", "3"]) == 0
+    names = sorted(p.name for p in out.glob("sia-*.db"))
+    assert len(names) == 3 and names[:2] == [old[3].name, old[4].name] and names[2] > old[4].name
+    assert (out / "notes.db").exists()
+
+
+def test_backup_integrity_failure_exits_non_zero_and_keeps_old_backups(tmp_path, monkeypatch):
+    populated_db(tmp_path, monkeypatch)
+    from sia import ops
+    out = tmp_path / "backups"
+    out.mkdir()
+    (out / "sia-20260101-000000.db").write_bytes(b"")
+    monkeypatch.setattr(ops, "integrity_check", lambda path: "*** in database main *** Page 3: btreeInitPage() error")
+    assert cli.main(["backup", "--db", str(tmp_path / "s.db"), "--dir", str(out), "--keep", "1"]) == 4
+    assert [p.name for p in out.iterdir()] == ["sia-20260101-000000.db"]  # bad copy deleted, old one kept
+
+
+def test_backup_of_a_missing_or_corrupt_database_fails(tmp_path):
+    assert cli.main(["backup", "--db", str(tmp_path / "nope.db"), "--dir", str(tmp_path / "b")]) == 4
+    bad = tmp_path / "bad.db"
+    bad.write_bytes(b"this is not a database" * 100)
+    assert cli.main(["backup", "--db", str(bad), "--dir", str(tmp_path / "b")]) == 4
+    assert not list((tmp_path / "b").glob("sia-*.db"))

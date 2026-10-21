@@ -53,3 +53,18 @@ Every place where the spec left room, and what was picked. Change any of these f
 ## Task 5: HEAD
 
 - `/privacy` and `/terms` answer `HEAD` as well as `/`, `/health` and `/dashboard`, so a monitor can watch any page.
+
+## Task 6: backups
+
+- **Code lives in `sia/ops.py`** (server operator commands), wired into the `sia` CLI, so the SDK module stays
+  free of server code.
+- **Timestamps are UTC** in backup file names, so they sort correctly across time-zone changes.
+- **Retention only touches files named exactly `sia-YYYYMMDD-HHMMSS.db`**, so nothing else in the directory is
+  ever deleted, and it runs only after the new copy passed its integrity check.
+- **A copy that fails the check is deleted** and the command exits 4, so a bad copy never counts as the newest.
+- **Restore checks the backup first**, refuses if anything answers `GET /health` at `SIA_BASE_URL` (default
+  `http://127.0.0.1:8000`), saves the current file as `<name>-before-restore-<UTC time>.db`, then copies with
+  SQLite's backup API (not a file copy) so the target's WAL files stay consistent.
+- **Two backups in the same second**: the second one fails rather than overwrite the first.
+- **Leaked-key revocation** for an unreachable customer is a Python one-liner in the runbook rather than a new CLI
+  command; the customer can already rotate their own key.

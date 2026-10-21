@@ -274,6 +274,17 @@ def cmd_admin(a):
     return 0
 
 
+def ops(name):
+    """Run a server operator command from sia/ops.py, mapping its errors onto exit code 4."""
+    def run(a):
+        from sia import ops as o
+        try:
+            return getattr(o, name)(a)
+        except o.OpsError as e:
+            raise SIAError(str(e))
+    return run
+
+
 # --- argument parsing ------------------------------------------------------------
 def parser():
     common = argparse.ArgumentParser(add_help=False)
@@ -373,6 +384,16 @@ def parser():
     ad.add_argument("request_id", nargs="?")
     ad.add_argument("--status", choices=["pending", "approved", "rejected"])
     ad.set_defaults(fn=cmd_admin)
+
+    db = argparse.ArgumentParser(add_help=False)
+    db.add_argument("--db", default=os.getenv("SIA_DB", "sia.db"), help="server database (default: $SIA_DB or sia.db)")
+    b = sub.add_parser("backup", parents=[db], help="copy the server database safely, check it, keep the newest N")
+    b.add_argument("--dir", default="backups")
+    b.add_argument("--keep", type=int, default=14)
+    b.set_defaults(fn=ops("backup_cmd"))
+    rs = sub.add_parser("restore", parents=[db], help="replace the server database with a backup (server stopped)")
+    rs.add_argument("file")
+    rs.set_defaults(fn=ops("restore_cmd"))
     return p
 
 

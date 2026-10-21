@@ -246,6 +246,8 @@ sia serve         [--host] [--port]           hosted API + dashboard
 sia create-org    NAME                        prints the organization's first key (shown once)
 sia set-plan      ORG_ID free|pro|team
 sia admin         requests [--status pending] | approve ID | reject ID      (SIA_BASE_URL, SIA_ADMIN_KEY)
+sia backup        [--dir backups] [--keep 14] [--db]     safe online copy + integrity check + retention
+sia restore       FILE [--db]                             server stopped; saves the current DB first
 ```
 
 Common options: `--project` (`SIA_PROJECT`), `--api-key` (`SIA_API_KEY`), `--base-url` (`SIA_BASE_URL`),
@@ -428,8 +430,13 @@ Local mode has no limits. Paid plans are bought through Razorpay (next section);
 with no expiry via `POST /v1/admin/orgs/{id}/plan` or `sia set-plan`.
 
 **Database.** SQLite in WAL mode. Schema changes are numbered migrations applied automatically at startup (see
-`schema_migrations`); existing databases from earlier versions upgrade in place. Back up the file (or the Docker
-`/data` volume) like any database.
+`schema_migrations`); existing databases from earlier versions upgrade in place.
+
+**Backups.** `sia backup [--dir backups] [--keep 14]` copies the database safely while the server runs, checks the
+copy with `PRAGMA integrity_check` and keeps the newest N; `sia restore FILE` (server stopped) puts one back after
+saving the current file. Schedule the backup daily, or replicate continuously with Litestream
+(`examples/deploy/litestream.yml`). Step by step, with restore, key rotation and outages:
+[`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 ---
 

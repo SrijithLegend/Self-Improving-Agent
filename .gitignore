@@ -9,3 +9,4 @@ trace.jsonl
 build/
 *.egg-info/
 sia-gate.json
+backups/

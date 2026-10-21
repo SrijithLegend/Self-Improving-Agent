@@ -49,7 +49,8 @@ rules are tested, but these must be addressed before hosting paying customers:
   Postgres and a shared limiter.
 - Request-size limiting relies on `Content-Length`; chunked uploads without it are not capped before parsing.
 - Run export loads up to 100,000 rows into memory.
-- No backups, metrics, alerting or on-call runbook. Logs go to stdout as JSON lines.
+- ~~No backups or on-call runbook.~~ Done (Task 6): `sia backup` / `sia restore`, a Litestream example and
+  `docs/RUNBOOK.md`. Still no metrics or alerting. Logs go to stdout as JSON lines.
 - No retention job: retention is applied when runs are ingested, so an idle project keeps old runs until the next write.
 - `sia/agent.py` managed-agent `study` and `improve` still run synchronously inside the request.
 
