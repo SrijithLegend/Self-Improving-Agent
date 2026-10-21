@@ -3,6 +3,7 @@ follows the numbers, whatever they turn out to be.
 
     python examples/devtools_demo.py            # real Gemini model (GENAI_API_KEY in .env, free tier is fine)
     python examples/devtools_demo.py --offline  # scripted stand-in model, no key needed (shows the mechanics only)
+    python examples/devtools_demo.py --hard     # harder, content-reasoning dataset, real model only (see hard())
 
 Fictional company, fictional data. The app is a returns assistant whose replies are parsed by downstream code, so
 every reply must start with "DECISION: YES" or "DECISION: NO".
@@ -165,10 +166,111 @@ def main(offline=False, db=None):
     return cmp
 
 
+# --- --hard: answers need rule interactions, exceptions and arithmetic, not just the right format --------------
+HARD_POLICY = """Trailhead Outfitters returns policy (fictional). Amounts are in rupees.
+1. Unworn, unused items can be returned within 30 days of delivery (day 30 included) for a refund of the price paid.
+2. Trail Club members get 60 days instead of 30.
+3. Worn or used items cannot be returned, except footwear with a manufacturing defect, which can be returned
+   within 1 year of delivery for a full refund even if worn.
+4. Clearance items are final sale and cannot be returned, even by members, unless rule 3 applies.
+5. Returns made after day 14 have a 10% restocking fee taken off the refund, except for members and defective items.
+6. Items bought in a discounted bundle must be returned together; the refund is the bundle price paid.
+7. Gifts can be returned only with the gift receipt; the refund is store credit, calculated the same way.
+8. The original shipping charge is not refunded, unless the item is defective."""
+
+HARD_PROMPT = ("You are the support assistant for Trailhead Outfitters. Answer customer questions about returns using "
+               "the policy. Start every reply with 'DECISION: YES' or 'DECISION: NO' on its own line, then "
+               "'REFUND: <amount in rupees, digits only>' on its own line (0 if nothing is refunded), then one sentence.")
+
+# Hand-checked against HARD_POLICY before any model run: (question, decision, refund). Written in pairs of the same
+# kind of case; the first of each pair goes to the dev set (the candidate is drafted from its failures), the second
+# to the held-out test set (the release decision). Not tuned after seeing results.
+HARD_CASES = [
+    ("Not a member. I bought a tent for 8,000 plus 200 shipping; it arrived 10 days ago, unused. Can I return it?",
+     "YES", 8000),
+    ("Not a member. Headlamp, 1,200 plus 100 shipping, delivered 3 days ago, still sealed. Can I return it?",
+     "YES", 1200),
+    ("Not a member. Unused rain jacket, paid 5,000, delivered 20 days ago. Can I return it, and for how much?",
+     "YES", 4500),
+    ("Not a member. Unused fleece, paid 2,000, delivered exactly 30 days ago. Can I return it?", "YES", 1800),
+    ("I'm a Trail Club member. Unused rain jacket, paid 5,000, delivered 20 days ago. Can I return it?", "YES", 5000),
+    ("Trail Club member here. Unused camp stove, paid 3,000, delivered 45 days ago. Can I return it?", "YES", 3000),
+    ("Not a member. Unused camp stove, paid 3,000, delivered 45 days ago. Can I return it?", "NO", 0),
+    ("Trail Club member. Unused camp stove, paid 3,000, delivered 70 days ago. Can I return it?", "NO", 0),
+    ("Not a member. Hiking boots, 9,000 plus 300 shipping, worn for 8 months; the sole split from a manufacturing "
+     "defect. Can I return them?", "YES", 9300),
+    ("Clearance trail shoes, paid 4,000, free shipping, worn for 3 months, and the stitching failed from a "
+     "manufacturing defect. Can I return them?", "YES", 4000),
+    ("Not a member. Boots worn for 14 months; the sole split from a manufacturing defect. Can I return them?",
+     "NO", 0),
+    ("Not a member. My backpack's zipper broke from a manufacturing defect after 2 months of use. Can I return it?",
+     "NO", 0),
+    ("I'm a Trail Club member. I bought an unused clearance tent 5 days ago. Can I return it?", "NO", 0),
+    ("Trail Club member. I wore a jacket on one hike 10 days after delivery and don't like it. Can I return it?",
+     "NO", 0),
+    ("Not a member. I bought a stove and a pot as a discounted bundle for 4,500. Can I return just the pot?", "NO", 0),
+    ("Not a member. Stove and pot bundle, 4,500, both unused, delivered 20 days ago. Can I return the whole bundle?",
+     "YES", 4050),
+    ("An unused sleeping bag gift, delivered 10 days ago, with the gift receipt. It cost 6,000. Neither of us is a "
+     "member. Can I return it?", "YES", 6000),
+    ("An unused sleeping bag gift, delivered 25 days ago, with the gift receipt. It cost 6,000. Neither of us is a "
+     "member. Can I return it?", "YES", 5400),
+    ("I got an unused water filter as a gift last week but there's no gift receipt. Can I return it?", "NO", 0),
+    ("Not a member. Unused trekking poles, paid 2,000, delivered exactly 14 days ago. Can I return them?",
+     "YES", 2000),
+]
+REFUND = re.compile(r"REFUND:\s*(?:₹|Rs\.?|INR)?\s*([\d,]+)")
+
+
+@scorer("refund", version="1")
+def refund(output, expected, example):
+    """Deterministic: the REFUND line's amount matches the expected one exactly."""
+    got, want = REFUND.search(str(output)), REFUND.search(str(expected))
+    return bool(got and want and int(got.group(1).replace(",", "")) == int(want.group(1).replace(",", "")))
+
+
+def hard(db=None):
+    """Baseline vs a candidate drafted from the dev set's failures only, decided on the held-out test set."""
+    from sia.llm import LLM
+    model = LLM("gemini", os.environ["GENAI_API_KEY"], os.getenv("DEMO_MODEL"))
+    db = db or str(Path(tempfile.mkdtemp()) / "sia_hard.db")
+    sia = SIAClient(project="trailhead-hard", local=db)
+    target = lambda inp, p: model.text(f"{p}\n\nPOLICY:\n{HARD_POLICY}", inp["question"], temperature=0)  # noqa: E731
+    sets = {}
+    for name, cases in (("hard-dev", HARD_CASES[0::2]), ("hard-test", HARD_CASES[1::2])):
+        sets[name] = sia.dataset(name)
+        sets[name].add_examples([{"input": {"question": q}, "expected_output": f"DECISION: {d}\nREFUND: {r}"}
+                                 for q, d, r in cases])
+    v1 = sia.create_version(HARD_PROMPT, note="baseline")
+    sia.approve(v1["version"])
+    sia.activate(v1["version"])
+    scorers, res, out = [decision, refund], {}, {}
+    for name, ds in sets.items():
+        res[name, "base"] = sia.evaluate(ds, target, scorers, version="active")
+    cand = sia.propose_improvement(model, evaluation=res["hard-dev", "base"])  # dev failures only
+    for name, ds in sets.items():
+        res[name, "cand"] = sia.evaluate(ds, target, scorers, version=cand["version"])
+    for name in sets:
+        cmp = sia.compare(res[name, "base"], res[name, "cand"])
+        out[name] = {"baseline": res[name, "base"]["summary"]["score"],
+                     "candidate": res[name, "cand"]["summary"]["score"], "verdict": cmp["verdict"],
+                     "mean_gain": cmp["mean_gain"], "regressions": len(cmp["regressions"] or [])}
+        print(f"{name:<10} baseline {out[name]['baseline']:.3f}  candidate {out[name]['candidate']:.3f}  "
+              f"verdict {cmp['verdict']} ({cmp['reason']})")
+    print(f"candidate system_prompt@{cand['version']}:\n{cand['content']}\nmodel calls: {model.calls}  database: {db}")
+    print("RESULT " + json.dumps(out))
+    return out
+
+
 if __name__ == "__main__":
     try:
         from dotenv import load_dotenv
         load_dotenv()
     except ImportError:
         pass
-    main(offline="--offline" in sys.argv)
+    if "--hard" in sys.argv:
+        if not os.getenv("GENAI_API_KEY"):
+            sys.exit("--hard needs a real model: set GENAI_API_KEY in .env")
+        hard()
+    else:
+        main(offline="--offline" in sys.argv)
