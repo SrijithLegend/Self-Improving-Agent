@@ -379,6 +379,8 @@ class DatasetExampleIn(Strict):
 
 class DatasetExamplesIn(Strict):
     examples: list[DatasetExampleIn] = Field(min_length=1, max_length=1000)
+    allow_duplicates: bool = Field(False, description="Add examples even if an identical (input, expected_output) "
+                                                      "is already in the dataset.")
 
 
 class ExamplePatch(Strict):
@@ -777,9 +779,8 @@ def dataset_history(project_id: str, dataset_id: str, t=Depends(tenant)):
 @app.post("/v1/projects/{project_id}/datasets/{dataset_id}/examples", status_code=201)
 def add_dataset_examples(project_id: str, dataset_id: str, body: DatasetExamplesIn, t=Depends(tenant)):
     lim = limits(t)
-    if lim and dev.count_examples(t["id"], project_id, dataset_id) + len(body.examples) > lim["examples_per_dataset"]:
-        raise QuotaExceeded(f"The {t['plan']} plan allows {lim['examples_per_dataset']} examples per dataset.")
-    return {"ids": dev.add_examples(t["id"], project_id, dataset_id, [e.model_dump() for e in body.examples])}
+    return dev.add_examples(t["id"], project_id, dataset_id, [e.model_dump() for e in body.examples],
+                            body.allow_duplicates, lim and lim["examples_per_dataset"])  # {"ids": [...], "skipped": n}
 
 
 @app.put("/v1/projects/{project_id}/datasets/{dataset_id}/examples/{example_id}")

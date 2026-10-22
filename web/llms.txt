@@ -10,7 +10,7 @@ Hosted auth: Authorization: Bearer <SIA key>. Keys have scope "full" or "ingest"
 
 - @sia.trace / sia.start_run(name, input): record a run (input, output, latency, errors, nested steps)
 - sia.feedback(run, rating, correction=...): pending feedback; sia.review_feedback(id, "verified", dataset=...) turns it into a test case
-- sia.create_dataset(name).add_example(input, expected_output, critical=...): versioned datasets
+- sia.create_dataset(name).add_example(input, expected_output, critical=...): versioned datasets; an identical (input, expected_output) is skipped unless allow_duplicate=True
 - sia.evaluate(dataset, target, scorers): score a target function on a dataset
 - sia.compare(baseline, candidate): paired verdict improved / no_improvement / inconclusive / regressed
 - sia.create_version / approve / activate / get_prompt: versioned prompts with an explicit release step

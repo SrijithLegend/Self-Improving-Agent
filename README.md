@@ -95,6 +95,9 @@ ds.add_example(input={"question": "Can I get a refund after 40 days?"},
                expected_output="DECISION: NO", critical=True)   # critical = may never regress
 ```
 
+Re-running the script is safe: an example whose input and expected output are already in the dataset is skipped
+(its id is returned and the dataset version stays the same). Pass `allow_duplicate=True` to add it again on purpose.
+
 **3. Evaluate.** Your function is called once per example and scored:
 
 ```python
