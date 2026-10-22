@@ -51,3 +51,49 @@ def test_hosted_api_skips_duplicates_and_counts_only_new_ones_against_the_plan(t
     r = c.post(f"/v1/projects/{sia.project_id}/datasets/{ds.id}/examples", headers=h,
                json={"examples": [{"input": "c", "expected_output": "3"}]})
     assert r.status_code == 402  # a genuinely new example past the limit still is
+
+
+# --- 2. redaction for the Indian market and more secret formats ---------------------------------------------------
+def aadhaar_like(base="23456789012"):
+    from sia_devtools.store import _verhoeff
+    return next(base + str(d) for d in range(10) if _verhoeff(base + str(d)))
+
+
+def test_verhoeff_matches_the_reference_example():
+    from sia_devtools.store import _verhoeff
+    assert _verhoeff("2363") and not _verhoeff("2364")  # 236 -> check digit 3 (the standard worked example)
+    assert sum(_verhoeff("23456789012" + str(d)) for d in range(10)) == 1  # exactly one check digit fits
+
+
+def test_aadhaar_and_pan_are_opt_in_and_checked():
+    from sia_devtools.store import DEFAULT_REDACT, redactor
+    good = aadhaar_like()
+    bad = good[:-1] + str((int(good[-1]) + 1) % 10)  # wrong check digit: an order id, not an Aadhaar
+    spaced = f"{good[:4]} {good[4:8]} {good[8:]}"
+    text = f"My Aadhaar is {spaced}, also {good}, order {bad}, PAN ABCPE1234F, ref ABCXE1234F, 1{good}"
+    assert redactor(DEFAULT_REDACT)(text) == text  # opt-in: the defaults leave them alone
+    out = redactor(DEFAULT_REDACT + ["aadhaar", "pan"])(text)
+    assert out == (f"My Aadhaar is [REDACTED:aadhaar], also [REDACTED:aadhaar], order {bad}, PAN [REDACTED:pan], "
+                   f"ref ABCXE1234F, 1{good}")  # X isn't a PAN holder type; a 13-digit run isn't an Aadhaar
+    assert redactor(["aadhaar"])(f"{good[:4]}-{good[4:8]} {good[8:]}") == f"{good[:4]}-{good[4:8]} {good[8:]}"
+
+
+def test_more_secret_formats_are_masked_by_default():
+    from sia_devtools.store import DEFAULT_REDACT, redactor
+    scrub = redactor(DEFAULT_REDACT)
+    secrets = ["ghp_" + "a1B2" * 9, "github_pat_" + "11ABCDEFG0" * 3, "xoxb-1234567890-abcdefghij",
+               "xoxp-1234567890-0987654321-abc", "AKIAIOSFODNN7EXAMPLE", "rzp_live_AbCdEf123456"]
+    for s in secrets:
+        assert scrub(f"token={s} end") == "token=[REDACTED:secrets] end", s
+    for keep in ("rzp_test_AbCdEf123456", "AKIA short", "the ghp_ prefix", "xoxb"):
+        assert scrub(keep) == keep, keep
+
+
+def test_project_setting_redacts_aadhaar_before_storage(tmp_path):
+    from sia_devtools import SIAClient
+    sia = SIAClient(project="support-bot", local=str(tmp_path / "local.db"))
+    sia.update_settings(redact=["secrets", "cards", "aadhaar", "pan"])
+    good = aadhaar_like()
+    ds = sia.dataset("d")
+    ds.add_example({"question": f"Update my Aadhaar {good} and PAN ABCPE1234F"}, "OK")
+    assert ds.examples()[0]["input"] == {"question": "Update my Aadhaar [REDACTED:aadhaar] and PAN [REDACTED:pan]"}

@@ -27,7 +27,7 @@ Include what you found, how to reproduce it and the impact. You should get an an
 | Server-side request forgery | Callers can't choose an LLM base URL unless the server opts in (`SIA_ALLOW_CUSTOM_BASE_URL=1`); model names are validated before they go into URLs; redirects are not followed | `sia/llm.py` |
 | Key leakage through errors | Provider error messages are scrubbed of the caller's model key; internal errors return only a request id, and the stack trace stays in the server log | `sia/llm.py`, `guard_and_log` |
 | Prompt injection through feedback | Corrections stay pending until a person verifies them; rejected feedback is never used; locked text can't be removed by a candidate | `sia_devtools/store.py`, `sia/agent.py` |
-| Personal data in stored runs | Redaction (secrets, cards, email, phone, your own patterns) runs in the SDK before data leaves your app and again on the server | `sia_devtools/store.py` |
+| Personal data in stored runs | Redaction (secrets, including GitHub, Slack, AWS and Razorpay live keys; cards; and opt-in email, phone, Aadhaar, PAN and your own patterns) runs in the SDK before data leaves your app and again on the server | `sia_devtools/store.py` |
 | The keyless local mode leaking onto the network | It answers only loopback clients addressed as localhost, refuses requests that came through a proxy, and `sia dashboard` binds to 127.0.0.1 | `key_auth` |
 | SQL injection | All values are bound parameters; the few dynamic SQL fragments are fixed strings or whitelisted column names | `bandit` in CI |
 | Vulnerable dependencies | `pip-audit` and `bandit` run in CI on every push | `.github/workflows/tests.yml` |

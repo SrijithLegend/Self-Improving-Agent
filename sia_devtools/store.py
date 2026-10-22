@@ -22,12 +22,38 @@ NAME_RX = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 # --- redaction ----------------------------------------------------------------
 REDACTORS = {
     "secrets": r"(?:sk|pk|rk|sia)[-_][A-Za-z0-9_\-]{16,}|AIza[0-9A-Za-z_\-]{30,}|(?i:bearer)\s+[A-Za-z0-9._~+/\-]{16,}"
-               r"|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
+               r"|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"
+               r"|\bgh[pousr]_[A-Za-z0-9]{30,}|\bgithub_pat_[A-Za-z0-9_]{22,}"  # GitHub tokens
+               r"|\bxox[abposr]-[A-Za-z0-9-]{10,}"  # Slack tokens
+               r"|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"  # AWS access key ids
+               r"|\brzp_live_[A-Za-z0-9]{10,}",  # Razorpay live keys
     "cards": r"\b\d(?:[ -]?\d){14,15}\b",
     "email": r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+",
     "phone": r"\+?\d[\d ().-]{8,}\d",
+    # India (opt-in). Aadhaar: 12 digits, first 2-9, optionally grouped 4-4-4; only masked if the Verhoeff check
+    # digit is right, so order ids and timestamps of the same length pass through. PAN: AAAAA9999A, where the
+    # 4th letter is the holder type (P person, C company, ...).
+    "aadhaar": r"(?<![\d-])[2-9]\d{3}([ -]?)\d{4}\1\d{4}(?![\d-])",
+    "pan": r"\b[A-Z]{3}[ABCFGHJLPT][A-Z]\d{4}[A-Z]\b",
 }
 DEFAULT_REDACT = ["secrets", "cards"]
+
+
+# Verhoeff checksum tables (dihedral group D5), used for Aadhaar numbers
+_VD = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
+       [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+       [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3], [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
+       [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]]
+_VP = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
+       [8, 9, 1, 6, 0, 4, 3, 5, 2, 7], [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+       [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]]
+
+
+def _verhoeff(digits):
+    c = 0
+    for i, x in enumerate(reversed(digits)):
+        c = _VD[c][_VP[i % 8][int(x)]]
+    return c == 0
 
 
 def _luhn(digits):
@@ -47,6 +73,8 @@ def redactor(rules):
     def mask(name):
         if name == "cards":  # only real-looking card numbers (Luhn check), not every long id
             return lambda m: "[REDACTED:card]" if _luhn(re.sub(r"\D", "", m.group(0))) else m.group(0)
+        if name == "aadhaar":  # only numbers with a valid Verhoeff check digit
+            return lambda m: "[REDACTED:aadhaar]" if _verhoeff(re.sub(r"\D", "", m.group(0))) else m.group(0)
         return lambda m: f"[REDACTED:{name}]"
 
     subs = [(rx, mask(name)) for name, rx in compiled]

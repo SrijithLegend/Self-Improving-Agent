@@ -458,7 +458,9 @@ history) showed the loop working on a free model; learned lessons helped in one 
 | `HOST`, `PORT` | `127.0.0.1`, `8000` | `sia serve` |
 
 Project settings (`sia.update_settings(...)`, `PATCH /projects/{p}`, or the dashboard):
-`redact` (rules, default `["secrets", "cards"]`), `retention_days`, `policy` (see verdicts), `locked_text`
+`redact` (rules, default `["secrets", "cards"]`; also `email`, `phone`, and for Indian data `aadhaar` (checksum-verified) and
+`pan`; or your own regexes. `secrets` covers API keys, bearer tokens, private keys, and GitHub, Slack, AWS and Razorpay
+live keys), `retention_days`, `policy` (see verdicts), `locked_text`
 (lines every version must keep verbatim, for example safety rules: candidates that drop them are refused).
 
 **Plans** (hypotheses, not validated prices; enforced server-side):
