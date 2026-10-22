@@ -433,3 +433,14 @@ def test_cli_reads_the_env_file_where_it_runs(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert cli.main(["backup", "--dir", "b"]) == 0
     assert len(list((tmp_path / "b").glob("sia-*.db"))) == 1
+
+
+# --- found by the Task 13 demo: a single improved example is a tie with z*SE, not an improvement ----------------
+def test_one_improved_example_is_never_decided_by_rounding():
+    from sia_devtools.scoring import compare_scores
+    for n in (7, 10, 13, 20):  # before the fix: "improved" at 10 and 20, "inconclusive" at 7 and 13
+        for g in (0.5, 1.0):
+            r = compare_scores([0.0] * n, [0.0] * (n - 1) + [g])
+            assert r["verdict"] == "inconclusive", (n, g, r["reason"])
+    assert compare_scores([0.0] * 10, [1.0] * 3 + [0.0] * 7)["verdict"] == "improved"  # a real gain still wins
+    assert compare_scores([1.0] * 10, [0.0] + [1.0] * 9)["verdict"] == "inconclusive"  # and ties go both ways
