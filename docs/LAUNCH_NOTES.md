@@ -128,7 +128,8 @@ Every place where the spec left room, and what was picked. Change any of these f
   policy), each with its commit. The access-request flow, usage cap, HEAD routes and `sia doctor` weren't listed
   there, so they're described in the README instead.
 - **`.gitignore`** got `backups/` in Task 6, when `sia backup` started writing there by default.
-- **`SPEC.md`** still names `phase1/` in its original file list; it's the historical spec and was left as written.
+- **`SPEC.md`** still names `phase1/` in its original file list; it's the historical spec and was left as written
+  (now `docs/SPEC.md`, marked historical).
 
 ## Found along the way
 

@@ -585,22 +585,32 @@ sia_devtools/          # the SDK and CLI (pip package "sia-devtools", command "s
 ├── client.py          # SIAClient, Run, Dataset, Prompt: tracing, feedback, datasets, evaluate, versions
 ├── store.py           # SQLite storage shared by local mode and the server; redaction; migrations
 ├── scoring.py         # scorers, paired comparison, CI gate (pure functions)
-├── cli.py             # sia eval run|compare|gate, improve, versions, runs, feedback, serve, dashboard
+├── cli.py             # sia eval run|compare|gate, improve, versions, runs, feedback, serve, dashboard, admin, ops
 └── errors.py          # one exception family, same in local and hosted mode
 sia/                   # the server
 ├── api.py             # FastAPI: auth, scopes, plans, DevTools routes, managed agents routes
 ├── dashboard.html     # the dashboard at /dashboard (single static page, no build step)
 ├── store.py           # organizations, keys, plans, payments, usage, managed agents
 ├── billing.py         # Razorpay orders, signature and webhook checks
+├── ops.py             # sia backup, restore, maintenance, doctor
 ├── agent.py           # the original self-improvement engine
 └── llm.py             # one HTTP client for 9 LLM providers
 web/                        # landing page served at / (static, no build step; see web/README.md)
 examples/devtools_demo.py   # the end-to-end demo above
 examples/ci/sia-gate.yml    # GitHub Actions gate example
 examples/demo.py            # the original managed-agent demo
-tests/                      # 65 offline tests (no API keys)
+examples/deploy/            # nginx and Litestream examples
+tests/                      # offline tests (no API keys)
 LICENSE.md                  # FSL-1.1-ALv2
-docs/AUDIT.md               # audit, what was built, readiness assessment
+SECURITY.md                 # threat model, production checklist
+docs/
+├── AUDIT.md                # audit, what was built, production readiness
+├── RUNBOOK.md              # backups, restore, key rotation, outages, daily jobs
+├── RAZORPAY_TEST_PLAN.md   # payments checklist to run in test mode before going live
+├── LAUNCH_SPEC.md          # the launch plan, with LAUNCH_NOTES.md (choices made) and LAUNCH_REVIEW.md
+├── IMPROVEMENTS.md         # post-launch improvement list
+├── DESIGN_RULES.md         # rules the landing page and dashboard follow (FRONTEND_SPEC.md: the original brief)
+└── SPEC.md                 # historical: the original product brief
 ```
 
 ## License
