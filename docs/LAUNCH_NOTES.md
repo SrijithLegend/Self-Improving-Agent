@@ -150,3 +150,20 @@ Every place where the spec left room, and what was picked. Change any of these f
   comparisons, and the README says so.
 - **Refund scorer** takes the first `REFUND:` line with digits. It was not changed between runs so all three are
   scored the same way; the README names its one effect.
+
+## Fixes from the pre-merge review (`docs/LAUNCH_REVIEW.md`)
+
+- **Landing page and `agent.md`** now show the hard demo's held-out results and verdict ("not shown to help")
+  next to the easy demo, instead of saying a harder test is still needed. Taglines say "a release gate for prompt
+  changes" rather than promising improvements.
+- **Backups are one self-contained file** (`journal_mode=DELETE` on the copy), so the integrity check no longer
+  leaves `-wal`/`-shm` files; retention also deletes side files left by earlier backups. Restore's safety copy is
+  made the same way. A restore into the live file switches it out of WAL mode until the server starts, which turns
+  WAL back on.
+- **Approving an access request is one transaction**: if creating the organization or its key fails, the request
+  stays pending and nothing is half-made.
+- **`sia restore`** checks `127.0.0.1:$PORT` when `SIA_BASE_URL` is unset, matching `sia serve`.
+- **DESIGN_RULES §8 emoji check** is a Python one-liner: `grep -P` errors without a UTF-8 locale and matched bytes
+  inside `og.png`. The review said a fixed copy was waiting locally; there was none, so it was written here.
+- **Not done from the review**: its suggestion to market that the gate "blocked the regressions". Neither demo had
+  a regression to block, so the copy doesn't claim it.
