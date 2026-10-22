@@ -4,7 +4,7 @@
 
 **A release gate for prompt changes: a change reaches production only when your own test cases show it helps.**
 
-**Status: public beta.** What is and isn't production-ready: [`docs/AUDIT.md`](docs/AUDIT.md#3-production-readiness-not-yet).
+**Status: public beta.** What is and isn't production-ready: [`docs/AUDIT.md`](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/docs/AUDIT.md#3-production-readiness-not-yet).
 
 Capture runs from your existing Python app → turn verified corrections into test cases →
 let an LLM draft a candidate prompt → measure both versions on the same dataset → release only what the numbers support.
@@ -63,7 +63,7 @@ pip install "sia-devtools[server] @ git+https://github.com/SrijithLegend/Self-Im
 ```
 
 The package is ready for PyPI (`pip install "sia-devtools[server]"` once the first release is published; see
-[`docs/RELEASING.md`](docs/RELEASING.md)). The SDK alone needs only `httpx`; `[server]` adds the API and dashboard.
+[`docs/RELEASING.md`](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/docs/RELEASING.md)). The SDK alone needs only `httpx`; `[server]` adds the API and dashboard.
 
 Or from a clone: `pip install -e ".[dev]"`, then `python -m pytest` should pass (the badge above shows CI).
 
@@ -234,7 +234,7 @@ It evaluates the candidate prompt and the **active** version on the same dataset
 | `2` / `4` | bad command line / runtime error |
 
 Works locally with no account (`--local file.db`) or against the hosted API (`SIA_API_KEY`). A ready-to-copy
-GitHub Actions workflow is in [`examples/ci/sia-gate.yml`](examples/ci/sia-gate.yml).
+GitHub Actions workflow is in [`examples/ci/sia-gate.yml`](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/examples/ci/sia-gate.yml).
 
 > [!IMPORTANT]
 > The gate only protects behaviour your dataset and target function actually exercise. Add verified examples for
@@ -386,7 +386,7 @@ sia admin reject REQUEST_ID
 ```
 
 Send the key to the requester over a private channel. Rejected requests are deleted after 90 days by
-`sia maintenance` (run it daily: [`docs/RUNBOOK.md`](docs/RUNBOOK.md)).
+`sia maintenance` (run it daily: [`docs/RUNBOOK.md`](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/docs/RUNBOOK.md)).
 
 **Keys.** `full` keys can do everything in the organization. Give production apps an **`ingest`** key: it can only
 send runs and feedback and read the active prompt. Keys are stored as SHA-256 hashes, can be listed (prefix, scope,
@@ -494,7 +494,7 @@ with no expiry via `POST /v1/admin/orgs/{id}/plan` or `sia set-plan`.
 copy with `PRAGMA integrity_check` and keeps the newest N; `sia restore FILE` (server stopped) puts one back after
 saving the current file. Schedule the backup daily, or replicate continuously with Litestream
 (`examples/deploy/litestream.yml`). Step by step, with restore, key rotation and outages:
-[`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+[`docs/RUNBOOK.md`](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/docs/RUNBOOK.md).
 
 ---
 
@@ -567,15 +567,15 @@ Billing endpoints: `GET /v1/billing`, `POST /v1/billing/orders`, `POST /v1/billi
   security headers, HSTS over https, `no-store` on API data, and internal errors that return only a request id.
   The admin API refuses to run with a weak key.
 
-**Before going to production, read [SECURITY.md](SECURITY.md)**: the threat model, a production checklist (HTTPS,
+**Before going to production, read [SECURITY.md](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/SECURITY.md)**: the threat model, a production checklist (HTTPS,
 trusted proxies, Host allowlist, edge rate limits) and what changes when you scale. An nginx example is in
-[`examples/deploy/nginx.conf`](examples/deploy/nginx.conf).
+[`examples/deploy/nginx.conf`](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/examples/deploy/nginx.conf).
 
 ---
 
 ## Known limitations
 
-Not production-ready yet. The full assessment is in [docs/AUDIT.md](docs/AUDIT.md). In short:
+Not production-ready yet. The full assessment is in [docs/AUDIT.md](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/docs/AUDIT.md). In short:
 
 - No user accounts or SSO; people share organization keys, and reviewer names are self-reported.
 - SQLite and a per-process rate limiter: one server instance. Postgres and a shared limiter are needed to scale out.
@@ -625,7 +625,7 @@ docs/
 ## License
 
 SIA is under the **Functional Source License, version 1.1, with an Apache 2.0 future license**
-([FSL-1.1-ALv2](LICENSE.md)).
+([FSL-1.1-ALv2](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/LICENSE.md)).
 
 - **You can** use it, change it and self-host it for free, inside your company or for clients, for research and
   for teaching.

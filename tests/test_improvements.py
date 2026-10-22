@@ -203,6 +203,7 @@ def test_sentry_reports_unhandled_errors_without_headers_or_bodies(tmp_path, mon
     monkeypatch.setitem(sys.modules, "sentry_sdk", fake)
     api, c = make_api(tmp_path, monkeypatch, SENTRY_DSN="https://key@example.ingest.sentry.io/1")
     assert sent["init"]["send_default_pii"] is False and sent["init"]["default_integrations"] is False
+    assert sent["init"]["include_local_variables"] is False and sent["init"]["max_request_body_size"] == "never"
 
     def boom():
         raise RuntimeError("db exploded")
@@ -216,6 +217,9 @@ def test_sentry_reports_unhandled_errors_without_headers_or_bodies(tmp_path, mon
                                              "headers": {"X-LLM-Key": "sk-1"}, "cookies": "c"},
                                  "user": {"ip_address": "1.2.3.4"}})
     assert scrubbed == {"request": {"method": "POST", "url": "https://h/v1/x"}}
+    frames = [{"function": "f", "vars": {"key": "'sia_SUPERSECRETKEY123'"}}]
+    scrubbed = api.sentry_scrub({"exception": {"values": [{"type": "E", "stacktrace": {"frames": frames}}]}})
+    assert "vars" not in str(scrubbed) and "sia_" not in str(scrubbed)
 
 
 def test_sentry_dsn_without_the_package_is_a_warning_not_a_crash(tmp_path, monkeypatch):
