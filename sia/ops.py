@@ -28,10 +28,20 @@ def integrity_check(path):
         return str(e)
 
 
-def copy_db(src, dest):
-    """sqlite3's online backup: a consistent copy even while the server is writing (WAL mode)."""
+def copy_db(src, dest, standalone=False):
+    """sqlite3's online backup: a consistent copy even while the server is writing (WAL mode). standalone switches
+    the copy out of WAL mode, so it is one self-contained file: opening a WAL copy read-only (the integrity check)
+    leaves -wal and -shm files behind that nothing ever cleans up."""
     with closing(sqlite3.connect(src, timeout=30)) as s, closing(sqlite3.connect(dest)) as d:
         s.backup(d)
+        if standalone:
+            d.execute("PRAGMA journal_mode=DELETE")
+
+
+def remove_db(path):
+    """Delete a database file and any -wal / -shm side files next to it."""
+    for p in (Path(path), Path(f"{path}-wal"), Path(f"{path}-shm")):
+        p.unlink(missing_ok=True)
 
 
 def backups(out_dir):
@@ -50,16 +60,16 @@ def backup(db, out_dir="backups", keep=14):
     if dest.exists():
         raise OpsError(f"{dest} already exists; wait a second and run it again")
     try:
-        copy_db(db, dest)
+        copy_db(db, dest, standalone=True)
     except sqlite3.Error as e:
-        dest.unlink(missing_ok=True)
+        remove_db(dest)
         raise OpsError(f"backup failed: {e}")
     if (check := integrity_check(dest)) != "ok":
-        dest.unlink()  # never let a bad copy count as the newest backup, or push a good one out of retention
+        remove_db(dest)  # never let a bad copy count as the newest backup, or push a good one out of retention
         raise OpsError(f"integrity check failed on the copy, so it was deleted: {check}")
     old = backups(out)[:-keep]
     for p in old:
-        p.unlink()
+        remove_db(p)  # side files too, including ones left by backups made before they were standalone
     print(f"backup {dest} ({dest.stat().st_size:,} bytes, integrity ok); {len(old)} old backup(s) deleted, "
           f"{min(keep, len(backups(out)))} kept")
     return 0
@@ -83,7 +93,7 @@ def restore(db, file, base_url):
     safety = None
     if Path(db).is_file():
         safety = Path(db).with_name(time.strftime(f"{Path(db).stem}-before-restore-%Y%m%d-%H%M%S.db", time.gmtime()))
-        copy_db(db, safety)
+        copy_db(db, safety, standalone=True)
     copy_db(file, db)  # page-by-page copy into the existing file, so its -wal/-shm stay consistent
     print(f"restored {db} from {file}" + (f"; the previous database is saved as {safety}" if safety else ""))
     return 0

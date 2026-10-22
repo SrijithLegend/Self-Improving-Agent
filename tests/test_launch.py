@@ -453,3 +453,23 @@ def test_landing_page_reports_the_hard_demo_honestly(tmp_path, monkeypatch):
         assert "A harder test: content reasoning" in text and "not shown to help" in text
         assert "0.917" in text and "0.967" in text
         assert "is needed to show SIA finding content fixes" not in text
+
+
+# --- review fix: backups are single self-contained files, and retention removes side files ----------------------
+def test_backup_leaves_no_side_files_and_retention_removes_old_ones(tmp_path, monkeypatch):
+    import sqlite3
+    populated_db(tmp_path, monkeypatch)
+    out = tmp_path / "backups"
+    out.mkdir()
+    old = out / "sia-20260101-000000.db"
+    old.write_bytes(b"")
+    for side in ("-wal", "-shm"):  # what backups made before this fix left behind
+        (out / f"{old.name}{side}").write_bytes(b"x")
+    assert cli.main(["backup", "--db", str(tmp_path / "s.db"), "--dir", str(out), "--keep", "1"]) == 0
+    [copy] = list(out.glob("sia-*.db"))
+    assert sorted(p.name for p in out.iterdir()) == [copy.name]  # old file and its side files gone, none new
+    with sqlite3.connect(copy) as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 30
+    from sia import ops
+    assert ops.integrity_check(copy) == "ok" and sorted(p.name for p in out.iterdir()) == [copy.name]
