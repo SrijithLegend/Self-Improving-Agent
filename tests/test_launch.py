@@ -473,3 +473,36 @@ def test_backup_leaves_no_side_files_and_retention_removes_old_ones(tmp_path, mo
         assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 30
     from sia import ops
     assert ops.integrity_check(copy) == "ok" and sorted(p.name for p in out.iterdir()) == [copy.name]
+
+
+# --- review fix: approving an access request is one transaction -------------------------------------------------
+def test_failed_approval_leaves_the_request_pending_and_no_org(tmp_path, monkeypatch):
+    import pytest
+    api, c = make(tmp_path, monkeypatch)
+    ask(c, company="Acme")
+    rid = api.store.access_requests()[0]["id"]
+    orgs = len(api.store.q("SELECT id FROM tenants"))
+
+    def broken(*a, **kw):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(type(api.store), "_new_key", staticmethod(broken))
+    with pytest.raises(RuntimeError):
+        api.store.decide_access_request(rid, True)
+    assert c.post(f"/v1/admin/access-requests/{rid}/approve", headers=ADMIN_H).status_code == 500
+    assert api.store.access_requests()[0]["status"] == "pending" and api.store.access_requests()[0]["org_id"] is None
+    assert len(api.store.q("SELECT id FROM tenants")) == orgs  # the half-made organization was rolled back
+    monkeypatch.undo()
+    monkeypatch.setenv("SIA_ADMIN_KEY", ADMIN)
+    assert c.post(f"/v1/admin/access-requests/{rid}/approve", headers=ADMIN_H).json()["status"] == "approved"
+
+
+def test_restore_checks_the_port_the_server_uses(tmp_path, monkeypatch):
+    from sia import ops
+    seen = []
+    monkeypatch.setattr(ops, "restore", lambda db, file, base_url: seen.append(base_url) or 0)
+    monkeypatch.delenv("SIA_BASE_URL", raising=False)
+    monkeypatch.setenv("PORT", "9123")
+    assert cli.main(["restore", "x.db", "--db", str(tmp_path / "s.db")]) == 0
+    monkeypatch.setenv("SIA_BASE_URL", "http://10.0.0.5:8000")
+    assert cli.main(["restore", "x.db", "--db", str(tmp_path / "s.db")]) == 0
+    assert seen == ["http://127.0.0.1:9123", "http://10.0.0.5:8000"]

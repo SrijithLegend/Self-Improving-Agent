@@ -137,9 +137,14 @@ class Store:
 
     # --- tenants (organizations) and API keys --------------------------------
     def create_tenant(self, name, plan="free"):
+        with self._conn() as c:
+            return self._new_tenant(c, name, plan)
+
+    def _new_tenant(self, c, name, plan="free"):
+        """The organization and its first full-scope key, on connection c (one transaction)."""
         tid = uuid.uuid4().hex
-        self.x("INSERT INTO tenants (id, name, created, plan) VALUES (?,?,?,?)", tid, name, time.time(), plan)
-        return {"tenant_id": tid, "name": name, "api_key": self.create_key(tid, "default")["api_key"]}
+        c.execute("INSERT INTO tenants (id, name, created, plan) VALUES (?,?,?,?)", (tid, name, time.time(), plan))
+        return {"tenant_id": tid, "name": name, "api_key": self._new_key(c, tid, "default")["api_key"]}
 
     # a paid plan whose period ran out falls back to free
     PLAN_SQL = "CASE WHEN t.paid_until IS NOT NULL AND t.paid_until < ? THEN 'free' ELSE t.plan END"
@@ -185,11 +190,16 @@ class Store:
 
     def create_key(self, tenant_id, name="key", scope="full"):
         """Keys are stored only as SHA-256 hashes; the plaintext is returned once, here."""
+        with self._conn() as c:
+            return self._new_key(c, tenant_id, name, scope)
+
+    @staticmethod
+    def _new_key(c, tenant_id, name="key", scope="full"):
         if scope not in KEY_SCOPES:
             raise ValueError(f"scope must be one of {KEY_SCOPES}")
         key, kid = "sia_" + secrets.token_urlsafe(32), uuid.uuid4().hex[:16]
-        self.x("INSERT INTO api_keys (id, org_id, name, prefix, key_hash, scope, created) VALUES (?,?,?,?,?,?,?)",
-               kid, tenant_id, name, key[:8], hash_key(key), scope, time.time())
+        c.execute("INSERT INTO api_keys (id, org_id, name, prefix, key_hash, scope, created) VALUES (?,?,?,?,?,?,?)",
+                  (kid, tenant_id, name, key[:8], hash_key(key), scope, time.time()))
         return {"id": kid, "name": name, "scope": scope, "prefix": key[:8], "api_key": key}
 
     def keys(self, tenant_id):
@@ -237,15 +247,17 @@ class Store:
 
     def decide_access_request(self, request_id, approve):
         """pending -> approved (creates the organization and its first full-scope key) | rejected. Returns None if
-        the request is missing or was already decided, so an approval can never create two organizations."""
-        if not self.n("UPDATE access_requests SET status=?, decided=? WHERE id=? AND status='pending'",
-                      "approved" if approve else "rejected", time.time(), request_id):
-            return None
-        if not approve:
-            return {"id": request_id, "status": "rejected"}
-        r = self.q("SELECT * FROM access_requests WHERE id=?", request_id)[0]
-        org = self.create_tenant(r["company"] or r["name"])
-        self.x("UPDATE access_requests SET org_id=? WHERE id=?", org["tenant_id"], request_id)
+        the request is missing or was already decided, so an approval can never create two organizations. One
+        transaction: if creating the organization fails, the request stays pending."""
+        with self._conn() as c:
+            if not c.execute("UPDATE access_requests SET status=?, decided=? WHERE id=? AND status='pending'",
+                             ("approved" if approve else "rejected", time.time(), request_id)).rowcount:
+                return None
+            if not approve:
+                return {"id": request_id, "status": "rejected"}
+            r = c.execute("SELECT * FROM access_requests WHERE id=?", (request_id,)).fetchone()
+            org = self._new_tenant(c, r["company"] or r["name"])
+            c.execute("UPDATE access_requests SET org_id=? WHERE id=?", (org["tenant_id"], request_id))
         return {"id": request_id, "status": "approved", "email": r["email"], "org_id": org["tenant_id"],
                 "org_name": org["name"], "api_key": org["api_key"]}  # the key is shown only once
 

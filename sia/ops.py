@@ -195,7 +195,8 @@ def backup_cmd(a):
 
 
 def restore_cmd(a):
-    return restore(a.db, a.file, os.getenv("SIA_BASE_URL", "http://127.0.0.1:8000"))
+    # the same port `sia serve` uses when SIA_BASE_URL isn't set
+    return restore(a.db, a.file, os.getenv("SIA_BASE_URL") or f"http://127.0.0.1:{os.getenv('PORT', '8000')}")
 
 
 def maintenance_cmd(a):

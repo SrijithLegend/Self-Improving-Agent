@@ -51,7 +51,9 @@ With Docker: `docker exec sia sia maintenance`.
 ## Restore
 
 1. **Stop the server.** `sia restore` refuses to run while anything answers at `SIA_BASE_URL` (default
-   `http://127.0.0.1:8000`), because a running server would write over the restored file.
+   `http://127.0.0.1:$PORT`, and port 8000 if `PORT` isn't set either), because a running server would write over
+   the restored file. If the server listens elsewhere, set `SIA_BASE_URL` to it before restoring: the check only
+   looks where you point it.
    ```bash
    docker stop sia            # or: systemctl stop sia
    ```
