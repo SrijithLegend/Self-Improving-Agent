@@ -334,6 +334,50 @@ are unchanged. Also noted, not changed between runs: the `refund` scorer reads t
 digits, so a reply that repeats the block can get refund credit from its second copy (it happened once, in run 2's
 baseline, on a case that failed its decision anyway).
 
+### The gate blocks a bad prompt edit (`--regression`)
+
+`python examples/devtools_demo.py --regression`, one run on `gemini-flash-latest`, 2026-10-22. The edit was written
+and committed (410bf2c) before any run: a teammate appends *"Customers are our top priority: be warm, give them the
+benefit of the doubt, and approve returns whenever you reasonably can."* to the live `--hard` prompt. It is gated on
+all 20 `--hard` cases; the 8 whose answer is NO are **critical** (the bot must never approve what the policy
+forbids), and no regressions are allowed.
+
+| | Score |
+|---|---|
+| Live prompt | **0.950** |
+| "Be generous" edit | **0.875** |
+| Verdict | `regressed`: 3 critical examples got worse |
+| Gate | **FAIL, exit code 1**. The edit was rejected; production stayed on the live prompt. 40 model calls. |
+
+The three cases it broke, all of which the policy says NO to: a member's unused stove delivered 70 days ago (past
+the 60-day window), a backpack with a zipper defect (the defect exception is for footwear only), and a member's
+unused clearance tent (clearance is final sale, even for members). This is the gate's main job: an edit that reads
+as harmless approved returns the policy forbids, and CI stopped it before release. One run; the edit is phrased
+to push the model toward YES, so this shows the gate catching a real regression, not how often edits like it do.
+
+### Multi-step refund arithmetic (`--harder`)
+
+`python examples/devtools_demo.py --harder`, one run on `gemini-flash-latest`, 2026-10-22. Same setup as `--hard`
+(dev/held-out split, candidate drafted from dev failures only, two deterministic scorers), but 20 cases whose
+refunds need coupon splits, restocking fees, shipping, cash-on-delivery fees and gift-credit bonuses. The expected
+answers come from a reference implementation of the policy (`harder_refund()`), not from arithmetic done by hand.
+The cases were committed (410bf2c) before any run. The first attempt crashed on a bug in the demo script (a loop
+variable overwrote the dataset name, fixed in 3290063); the cases, prompts and scoring did not change.
+
+| | Baseline | Candidate | Mean gain | Verdict |
+|---|---|---|---|---|
+| Dev (10) | 0.700 | 0.850 | +0.150 | improved |
+| **Held-out (10)** | **0.550** | **0.700** | **+0.150** | **improved**, with 1 regression |
+
+41 model calls. The candidate added one rule: items ordered together with a coupon are separate items, not
+bundles, and can be returned one at a time with a proportional coupon deduction.
+
+**What this does and does not show.** Unlike `--hard`, the baseline had room to improve here, and the candidate
+beat it on cases it was never shown. But this is **one run** on 10 held-out cases, the gain only just clears the
+threshold (+0.150 against 0.107), and one held-out case got worse. `--hard` showed scores moving by up to 0.05
+between identical runs, so treat this as a promising first result that needs repeat runs before anyone relies on
+it. Even the candidate scores only 0.700 on held-out cases, so this arithmetic is still hard for the model.
+
 ---
 
 ## Dashboard

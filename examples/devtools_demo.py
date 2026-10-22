@@ -251,11 +251,11 @@ def hard(db=None, policy=HARD_POLICY, prompt=HARD_PROMPT, cases=HARD_CASES, name
     sia.approve(v1["version"])
     sia.activate(v1["version"])
     scorers, res, out = [decision, refund], {}, {}
-    for name, ds in sets.items():
-        res[name, "base"] = sia.evaluate(ds, target, scorers, version="active")
+    for set_name, ds in sets.items():
+        res[set_name, "base"] = sia.evaluate(ds, target, scorers, version="active")
     cand = sia.propose_improvement(model, evaluation=res[f"{name}-dev", "base"])  # dev failures only
-    for name, ds in sets.items():
-        res[name, "cand"] = sia.evaluate(ds, target, scorers, version=cand["version"])
+    for set_name, ds in sets.items():
+        res[set_name, "cand"] = sia.evaluate(ds, target, scorers, version=cand["version"])
     for set_name in sets:
         cmp = sia.compare(res[set_name, "base"], res[set_name, "cand"])
         out[set_name] = {"baseline": res[set_name, "base"]["summary"]["score"],
