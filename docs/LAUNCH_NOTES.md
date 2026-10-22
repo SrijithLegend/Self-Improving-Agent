@@ -135,3 +135,18 @@ Every place where the spec left room, and what was picked. Change any of these f
 - **`sia` now reads the `.env` in the directory it runs from.** It used to search from the installed package's
   folder, so `cd /srv/sia && sia backup` from cron would have ignored the server's `.env`. Found while running
   `sia doctor` against a sample `.env`; covered by `test_cli_reads_the_env_file_where_it_runs`.
+
+## Task 13: the harder demo
+
+- **Dev / held-out split.** `propose_improvement` shows the model each failed case with its expected answer, so a
+  candidate scored on those same cases is graded on answers it was given. The 20 cases are split into 10 dev
+  (evidence for the candidate) and 10 held-out test (the decision). Both are reported; the held-out one counts.
+- **Pre-registered.** The dataset was committed (647f70e) before the first run and not changed afterwards. One case
+  was reworded before any run because its phrasing was ambiguous ("a gift 10 days after delivery").
+- **Gate fix.** With one improved example out of n, the mean gain equals the paired standard error, so with `z = 1`
+  the verdict was decided by float rounding. `compare_scores` now treats a tie with the threshold as not an
+  improvement (tolerance 1e-9). This makes the gate slightly stricter for everyone, `sia eval gate` included. The
+  demo's verdicts were recomputed from the stored scores; the run-time output said `improved` in 5 of 6
+  comparisons, and the README says so.
+- **Refund scorer** takes the first `REFUND:` line with digits. It was not changed between runs so all three are
+  scored the same way; the README names its one effect.

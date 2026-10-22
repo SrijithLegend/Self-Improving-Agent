@@ -62,7 +62,7 @@ What makes it different from a tracing tool:
 pip install "sia-devtools[server] @ git+https://github.com/SrijithLegend/Self-Improving-Agent"
 ```
 
-Or from a clone: `pip install -e ".[dev]"`, then `python -m pytest` should show **50 passed**.
+Or from a clone: `pip install -e ".[dev]"`, then `python -m pytest` should pass (the badge above shows CI).
 
 **1. Instrument the function you already have.** No framework, no rewrite:
 
@@ -283,6 +283,45 @@ right even at baseline (including clearance items), and the real failure was the
 the `decision` scorer needs that line, a format failure scores 0 on both scorers. A harder dataset, with cases the
 model actually decides wrongly, is needed to show SIA finding content fixes. The offline mode (`--offline`) uses a
 scripted model whose behaviour is hard-coded, so its numbers show the mechanics only.
+
+### A harder demo: content reasoning (`--hard`)
+
+`python examples/devtools_demo.py --hard`, run 3 times from a clean database on `gemini-flash-latest`, 2026-10-22.
+20 hand-checked returns questions whose answers need rule interactions, exceptions and refund arithmetic (member
+windows, a 10% restocking fee after day 14, defective footwear, clearance, bundles, gift credit, shipping). Two
+deterministic scorers: the `DECISION` and the exact `REFUND` amount. The output format is in the baseline prompt
+too, so format alone can't win. The cases are split into pairs: 10 **dev** cases, whose failures the candidate is
+drafted from, and 10 **held-out test** cases, which make the release decision and which the model never sees. The
+dataset was committed (647f70e) before the first run and not changed after.
+
+| | Baseline | Candidate | Mean gain | Verdict (fixed gate) |
+|---|---|---|---|---|
+| Dev, run 1 / 2 / 3 | 0.950 / 0.950 / 0.950 | 1.000 / 1.000 / 1.000 | +0.050 each | inconclusive ×3 |
+| **Held-out, run 1 / 2 / 3** | 0.900 / 0.950 / 0.900 | 0.950 / 0.950 / 1.000 | +0.050 / +0.000 / +0.100 | inconclusive / no_improvement / inconclusive |
+| **Held-out, mean (range)** | **0.917** (0.90–0.95) | **0.967** (0.95–1.00) | **+0.050** (0.00 to +0.10) | **not shown to help** |
+
+41 model calls per run. No regressions in any run.
+
+**What this does and does not show.** The result is **inconclusive**. The baseline already answered 18 of the 20
+fully right in every run, so there was little to gain. Two cases failed:
+
+- *Defective boots, 9,000 + 300 shipping* (dev): the baseline refunded 9,000, missing that shipping is refunded for
+  defective items. Every candidate added that rule and fixed it, but the candidate was drafted from this very
+  failure, so it is in-sample.
+- *A backpack with a zipper defect after 2 months of use* (held-out; the answer is NO, because only footwear has the
+  defect exception): the baseline said YES in all 3 runs, each time echoing the prompt's template
+  (`REFUND: <amount in rupees, digits only>`). The candidates' only change was the shipping rule, yet run 3's
+  candidate answered this correctly. That is most likely run-to-run variation in the model, not the new prompt. Run 1's
+  held-out gain is half a point on the same case: still `DECISION: YES`, but `REFUND: 0`.
+
+**A gate bug this demo found, now fixed.** When exactly one of n examples improves, the mean gain equals the
+standard error, so with the default `z = 1` the old comparison decided "improved" by floating-point rounding: the
+runs above first printed `improved` for dev in all 3 runs and for held-out in runs 1 and 3, while the same
+one-example case at n=7 printed `inconclusive`. A tie now never counts as an improvement (`sia_devtools/scoring.py`,
+with a test). The table shows the verdicts recomputed under the fix from the stored scores; the scores themselves
+are unchanged. Also noted, not changed between runs: the `refund` scorer reads the first `REFUND:` line that has
+digits, so a reply that repeats the block can get refund credit from its second copy (it happened once, in run 2's
+baseline, on a case that failed its decision anyway).
 
 ---
 
