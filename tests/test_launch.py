@@ -444,3 +444,12 @@ def test_one_improved_example_is_never_decided_by_rounding():
             assert r["verdict"] == "inconclusive", (n, g, r["reason"])
     assert compare_scores([0.0] * 10, [1.0] * 3 + [0.0] * 7)["verdict"] == "improved"  # a real gain still wins
     assert compare_scores([1.0] * 10, [0.0] + [1.0] * 9)["verdict"] == "inconclusive"  # and ties go both ways
+
+
+# --- review fix: the landing page reports the hard demo, not just the easy win ----------------------------------
+def test_landing_page_reports_the_hard_demo_honestly(tmp_path, monkeypatch):
+    api, c = make(tmp_path, monkeypatch)
+    for text in (c.get("/").text, (WEB / "agent.md").read_text(encoding="utf-8")):
+        assert "A harder test: content reasoning" in text and "not shown to help" in text
+        assert "0.917" in text and "0.967" in text
+        assert "is needed to show SIA finding content fixes" not in text

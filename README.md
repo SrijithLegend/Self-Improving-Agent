@@ -2,12 +2,12 @@
 
 # SIA DevTools
 
-**Turn AI-agent failures into tested improvements, with evidence that a change helps before it reaches production.**
+**A release gate for prompt changes: a change reaches production only when your own test cases show it helps.**
 
 **Status: public beta.** What is and isn't production-ready: [`docs/AUDIT.md`](docs/AUDIT.md#3-production-readiness-not-yet).
 
 Capture runs from your existing Python app → turn verified corrections into test cases →
-let an LLM propose a better prompt → measure both versions on the same dataset → release only what the numbers support.
+let an LLM draft a candidate prompt → measure both versions on the same dataset → release only what the numbers support.
 
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)
 [![tests](https://github.com/SrijithLegend/Self-Improving-Agent/actions/workflows/tests.yml/badge.svg)](https://github.com/SrijithLegend/Self-Improving-Agent/actions/workflows/tests.yml)
@@ -280,8 +280,8 @@ is a returns assistant whose replies are parsed by code, so each must start with
 **What this does and does not show.** The loop works end to end on a real model, the injected feedback was kept
 out, and the release followed the measured verdict. But this was an easy win: Gemini got the yes/no decisions
 right even at baseline (including clearance items), and the real failure was the missing `DECISION:` line. Since
-the `decision` scorer needs that line, a format failure scores 0 on both scorers. A harder dataset, with cases the
-model actually decides wrongly, is needed to show SIA finding content fixes. The offline mode (`--offline`) uses a
+the `decision` scorer needs that line, a format failure scores 0 on both scorers. The harder demo below tests
+content reasoning instead, and shows no measured gain. The offline mode (`--offline`) uses a
 scripted model whose behaviour is hard-coded, so its numbers show the mechanics only.
 
 ### A harder demo: content reasoning (`--hard`)

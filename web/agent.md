@@ -103,7 +103,19 @@ One run of `examples/devtools_demo.py` on the free `gemini-flash-latest` model, 
 | Verdict | improved: +1.000 on 10 paired examples, no regressions |
 | Injected feedback | rejected, never used |
 
-**What this does and does not show.** The loop works end to end on a real model, the injected feedback was kept out, and the release followed the measured verdict. But this was an easy win: Gemini got the yes/no decisions right even at baseline, and the real failure was the missing `DECISION:` line. Since the scorer needs that line, a format failure scores 0. A harder dataset, with cases the model actually decides wrongly, is needed to show SIA finding content fixes.
+**What this does and does not show.** The loop works end to end on a real model, the injected feedback was kept out, and the release followed the measured verdict. But this was an easy win: Gemini got the yes/no decisions right even at baseline, and the real failure was the missing `DECISION:` line. Since the scorer needs that line, a format failure scores 0.
+
+### A harder test: content reasoning
+
+`examples/devtools_demo.py --hard`, 22 October 2026, 3 runs from a clean database. 20 hand-checked cases that need rule interactions, exceptions and refund arithmetic, scored on the decision and the exact refund. The candidate was drafted from 10 dev cases; the other 10 were held out and made the decision. The dataset was committed before the first run. 41 model calls per run.
+
+| Held-out | Run 1 | Run 2 | Run 3 | Mean |
+|---|---|---|---|---|
+| Baseline | 0.900 | 0.950 | 0.900 | 0.917 |
+| Candidate | 0.950 | 0.950 | 1.000 | 0.967 |
+| Verdict | inconclusive | no improvement | inconclusive | not shown to help |
+
+**What this shows.** No measured gain. The baseline already got 18 of the 20 right, and the one held-out mistake (a defective backpack, which the policy doesn't cover) was not fixed by the new prompt. The gate did its job: it would not release a change the numbers didn't support. This test also found a bug in the gate itself, where a one-example gain could count as "improved" by rounding. It is fixed.
 
 ## Pricing
 

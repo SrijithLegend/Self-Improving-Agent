@@ -33,7 +33,7 @@ from .llm import LLM, LLMError
 from .store import PAID_PERIOD_DAYS, PLANS, Store
 
 app = FastAPI(title="SIA DevTools API", version="0.1.0",
-              description="Turn AI-agent failures into tested improvements: capture runs, verify feedback into "
+              description="A release gate for prompt changes: capture runs, verify feedback into "
                           "datasets, evaluate prompt versions and release them through an explicit approval step.")
 DB = os.getenv("SIA_DB", "sia.db")
 store, dev = Store(DB), DevStore(DB)

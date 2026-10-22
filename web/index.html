@@ -332,8 +332,28 @@ python examples/devtools_demo.py             <span class="c"># real Gemini model
       <p><strong>What this does and does not show.</strong> The loop works end to end on a real model, the injected
         feedback was kept out, and the release followed the measured verdict. But this was an easy win: Gemini got
         the yes/no decisions right even at baseline, and the real failure was the missing <code>DECISION:</code> line.
-        Since the scorer needs that line, a format failure scores 0. A harder dataset, with cases the model actually
-        decides wrongly, is needed to show SIA finding content fixes.</p>
+        Since the scorer needs that line, a format failure scores 0.</p>
+
+      <h3 id="h-hard">A harder test: content reasoning</h3>
+      <p><code>examples/devtools_demo.py --hard</code>, 22 October 2026, 3 runs from a clean database. 20 hand-checked
+        cases that need rule interactions, exceptions and refund arithmetic, scored on the decision and the exact
+        refund. The candidate was drafted from 10 dev cases; the other 10 were held out and made the decision. The
+        dataset was committed before the first run.</p>
+      <div class="table-wrap" tabindex="0" role="region" aria-labelledby="hard-cap">
+        <table>
+          <caption id="hard-cap">Held-out cases, 3 runs. 41 model calls per run.</caption>
+          <thead><tr><th scope="col">Held-out</th><th scope="col">Run 1</th><th scope="col">Run 2</th><th scope="col">Run 3</th><th scope="col">Mean</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Baseline</th><td>0.900</td><td>0.950</td><td>0.900</td><td>0.917</td></tr>
+            <tr><th scope="row">Candidate</th><td>0.950</td><td>0.950</td><td>1.000</td><td>0.967</td></tr>
+            <tr><th scope="row">Verdict</th><td>inconclusive</td><td>no improvement</td><td>inconclusive</td><td>not shown to help</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><strong>What this shows.</strong> No measured gain. The baseline already got 18 of the 20 right, and the one
+        held-out mistake (a defective backpack, which the policy doesn't cover) was not fixed by the new prompt. The gate
+        did its job: it would not release a change the numbers didn't support. This test also found a bug in the gate
+        itself, where a one-example gain could count as "improved" by rounding. It is fixed.</p>
     </section>
 
     <section id="pricing" aria-labelledby="h-pricing">

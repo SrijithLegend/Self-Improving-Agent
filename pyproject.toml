@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sia-devtools"
 version = "0.1.0"
-description = "Turn AI-agent failures into tested improvements: traces, verified feedback, versioned datasets, paired evaluations and a CI regression gate."
+description = "A release gate for prompt changes: traces, verified feedback, versioned datasets, paired evaluations and a CI regression gate."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "FSL-1.1-ALv2" }

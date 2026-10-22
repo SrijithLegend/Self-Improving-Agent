@@ -1,4 +1,4 @@
-"""SIA DevTools: turn AI-agent failures into tested improvements.
+"""SIA DevTools: a release gate for prompt changes.
 
     from sia_devtools import SIAClient
     sia = SIAClient(project="my-agent")            # local mode; pass api_key=... for the hosted API
