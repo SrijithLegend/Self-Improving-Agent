@@ -309,7 +309,9 @@ def test_landing_page_is_served_without_shadowing_the_api(tmp_path, monkeypatch)
     import sia.api
     c = TestClient(importlib.reload(sia.api).app)
     r = c.get("/")
-    assert r.status_code == 200 and "self-improving" in r.text
+    # one product: the page sells SIA DevTools, not the old hosted agent
+    assert r.status_code == 200 and "Ship prompt changes only when your own test cases prove they help." in r.text
+    assert "Agents that learn your domain" not in r.text and "/v1/agents/" not in r.text
     assert c.get("/health").json()["ok"] and c.get("/docs").status_code == 200
     assert c.get("/v1/me").status_code == 401 and c.get("/dashboard").status_code == 200
     assert c.get("/llms.txt").status_code == 200 and c.get("/agent.md").status_code == 200

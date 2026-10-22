@@ -115,8 +115,8 @@ These are the ones that make a site look *fake*, not just generic.
 **Automated (paste into a terminal at the repo root):**
 
 ```bash
-# emojis
-grep -rnP "[\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}]" web/ && echo "FAIL: emojis"
+# emojis (Python, not grep -P: that errors with "code point too large" without a UTF-8 locale, and matches image bytes)
+python -c "import pathlib,re,sys; r=re.compile('[\U0001F300-\U0001FAFF☀-➿]'); bad=[str(p) for p in pathlib.Path('web').rglob('*') if p.suffix in ('.html','.md','.txt','.css','.js','.svg') and r.search(p.read_text(encoding='utf-8'))]; print('\n'.join(bad)); sys.exit(1 if bad else 0)" || echo "FAIL: emojis"
 # em dashes in copy
 grep -rn "—" web/*.html web/*.md && echo "FAIL: em dashes"
 # default fonts / icon sets

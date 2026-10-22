@@ -1,0 +1,19 @@
+# Continuous replication of the SIA database to S3-compatible storage with Litestream (https://litestream.io).
+# Placeholders only: replace the bucket, endpoint and region, and pass the keys as environment variables
+# (LITESTREAM_ACCESS_KEY_ID, LITESTREAM_SECRET_ACCESS_KEY), never in this file.
+#
+# Run it next to the server:   litestream replicate -config /etc/litestream.yml
+# Restore onto a new machine:  litestream restore -config /etc/litestream.yml /data/sia.db   (server stopped)
+#
+# Litestream replaces nothing in docs/RUNBOOK.md: keep the daily `sia backup` too, so there is a plain,
+# integrity-checked file you can restore without the bucket.
+dbs:
+  - path: /data/sia.db                       # SIA_DB
+    replicas:
+      - type: s3
+        bucket: your-backup-bucket
+        path: sia
+        endpoint: https://s3.your-provider.example   # omit for AWS S3
+        region: your-region
+        retention: 168h                      # keep a week of point-in-time history
+        sync-interval: 10s

@@ -2,13 +2,15 @@
 
 # SIA DevTools
 
-**Turn AI-agent failures into tested improvements, with evidence that a change helps before it reaches production.**
+**A release gate for prompt changes: a change reaches production only when your own test cases show it helps.**
+
+**Status: public beta.** What is and isn't production-ready: [`docs/AUDIT.md`](docs/AUDIT.md#3-production-readiness-not-yet).
 
 Capture runs from your existing Python app → turn verified corrections into test cases →
-let an LLM propose a better prompt → measure both versions on the same dataset → release only what the numbers support.
+let an LLM draft a candidate prompt → measure both versions on the same dataset → release only what the numbers support.
 
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-50%20passing-1f7a4d)
+[![tests](https://github.com/SrijithLegend/Self-Improving-Agent/actions/workflows/tests.yml/badge.svg)](https://github.com/SrijithLegend/Self-Improving-Agent/actions/workflows/tests.yml)
 ![Local first](https://img.shields.io/badge/local%20mode-no%20account%20needed-555)
 ![FastAPI](https://img.shields.io/badge/hosted%20API-FastAPI-009688?logo=fastapi&logoColor=white)
 
@@ -60,7 +62,7 @@ What makes it different from a tracing tool:
 pip install "sia-devtools[server] @ git+https://github.com/SrijithLegend/Self-Improving-Agent"
 ```
 
-Or from a clone: `pip install -e ".[dev]"`, then `python -m pytest` should show **50 passed**.
+Or from a clone: `pip install -e ".[dev]"`, then `python -m pytest` should pass (the badge above shows CI).
 
 **1. Instrument the function you already have.** No framework, no rewrite:
 
@@ -245,6 +247,11 @@ sia dashboard     [--db sia_local.db]        local mode UI, 127.0.0.1 only
 sia serve         [--host] [--port]           hosted API + dashboard
 sia create-org    NAME                        prints the organization's first key (shown once)
 sia set-plan      ORG_ID free|pro|team
+sia admin         requests [--status pending] | approve ID | reject ID      (SIA_BASE_URL, SIA_ADMIN_KEY)
+sia backup        [--dir backups] [--keep 14] [--db]     safe online copy + integrity check + retention
+sia restore       FILE [--db]                             server stopped; saves the current DB first
+sia maintenance   [--db]                                  daily retention job; one JSON line of counts
+sia doctor        [--db] [--backup-dir backups]           launch readiness: PASS / WARN / FAIL, exit 1 on a FAIL
 ```
 
 Common options: `--project` (`SIA_PROJECT`), `--api-key` (`SIA_API_KEY`), `--base-url` (`SIA_BASE_URL`),
@@ -273,9 +280,48 @@ is a returns assistant whose replies are parsed by code, so each must start with
 **What this does and does not show.** The loop works end to end on a real model, the injected feedback was kept
 out, and the release followed the measured verdict. But this was an easy win: Gemini got the yes/no decisions
 right even at baseline (including clearance items), and the real failure was the missing `DECISION:` line. Since
-the `decision` scorer needs that line, a format failure scores 0 on both scorers. A harder dataset, with cases the
-model actually decides wrongly, is needed to show SIA finding content fixes. The offline mode (`--offline`) uses a
+the `decision` scorer needs that line, a format failure scores 0 on both scorers. The harder demo below tests
+content reasoning instead, and shows no measured gain. The offline mode (`--offline`) uses a
 scripted model whose behaviour is hard-coded, so its numbers show the mechanics only.
+
+### A harder demo: content reasoning (`--hard`)
+
+`python examples/devtools_demo.py --hard`, run 3 times from a clean database on `gemini-flash-latest`, 2026-10-22.
+20 hand-checked returns questions whose answers need rule interactions, exceptions and refund arithmetic (member
+windows, a 10% restocking fee after day 14, defective footwear, clearance, bundles, gift credit, shipping). Two
+deterministic scorers: the `DECISION` and the exact `REFUND` amount. The output format is in the baseline prompt
+too, so format alone can't win. The cases are split into pairs: 10 **dev** cases, whose failures the candidate is
+drafted from, and 10 **held-out test** cases, which make the release decision and which the model never sees. The
+dataset was committed (647f70e) before the first run and not changed after.
+
+| | Baseline | Candidate | Mean gain | Verdict (fixed gate) |
+|---|---|---|---|---|
+| Dev, run 1 / 2 / 3 | 0.950 / 0.950 / 0.950 | 1.000 / 1.000 / 1.000 | +0.050 each | inconclusive ×3 |
+| **Held-out, run 1 / 2 / 3** | 0.900 / 0.950 / 0.900 | 0.950 / 0.950 / 1.000 | +0.050 / +0.000 / +0.100 | inconclusive / no_improvement / inconclusive |
+| **Held-out, mean (range)** | **0.917** (0.90–0.95) | **0.967** (0.95–1.00) | **+0.050** (0.00 to +0.10) | **not shown to help** |
+
+41 model calls per run. No regressions in any run.
+
+**What this does and does not show.** The result is **inconclusive**. The baseline already answered 18 of the 20
+fully right in every run, so there was little to gain. Two cases failed:
+
+- *Defective boots, 9,000 + 300 shipping* (dev): the baseline refunded 9,000, missing that shipping is refunded for
+  defective items. Every candidate added that rule and fixed it, but the candidate was drafted from this very
+  failure, so it is in-sample.
+- *A backpack with a zipper defect after 2 months of use* (held-out; the answer is NO, because only footwear has the
+  defect exception): the baseline said YES in all 3 runs, each time echoing the prompt's template
+  (`REFUND: <amount in rupees, digits only>`). The candidates' only change was the shipping rule, yet run 3's
+  candidate answered this correctly. That is most likely run-to-run variation in the model, not the new prompt. Run 1's
+  held-out gain is half a point on the same case: still `DECISION: YES`, but `REFUND: 0`.
+
+**A gate bug this demo found, now fixed.** When exactly one of n examples improves, the mean gain equals the
+standard error, so with the default `z = 1` the old comparison decided "improved" by floating-point rounding: the
+runs above first printed `improved` for dev in all 3 runs and for held-out in runs 1 and 3, while the same
+one-example case at n=7 printed `inconclusive`. A tie now never counts as an improvement (`sia_devtools/scoring.py`,
+with a test). The table shows the verdicts recomputed under the fix from the stored scores; the scores themselves
+are unchanged. Also noted, not changed between runs: the `refund` scorer reads the first `REFUND:` line that has
+digits, so a reply that repeats the block can get refund credit from its second copy (it happened once, in run 2's
+baseline, on a case that failed its decision anyway).
 
 ---
 
@@ -317,6 +363,20 @@ you if something failed). Transient failures (network, 429, 5xx) are kept and re
 quota, invalid data) are dropped with a logged warning instead of retrying forever. Your app's own exceptions are
 never swallowed.
 
+**Onboarding (public beta).** There is no self-serve signup yet. Visitors use the **Request access** form on the
+landing page (`POST /v1/access-requests`: public, 5 per IP per hour, a hidden honeypot field, and the same `202`
+answer whether or not the email is known). You review the queue and approve or reject from a shell:
+
+```bash
+export SIA_BASE_URL=https://sia.example.com SIA_ADMIN_KEY=...
+sia admin requests --status pending
+sia admin approve REQUEST_ID     # creates the organization and prints its first full-scope key, once
+sia admin reject REQUEST_ID
+```
+
+Send the key to the requester over a private channel. Rejected requests are deleted after 90 days by
+`sia maintenance` (run it daily: [`docs/RUNBOOK.md`](docs/RUNBOOK.md)).
+
 **Keys.** `full` keys can do everything in the organization. Give production apps an **`ingest`** key: it can only
 send runs and feedback and read the active prompt. Keys are stored as SHA-256 hashes, can be listed (prefix, scope,
 last used), revoked and rotated.
@@ -330,7 +390,7 @@ All under `/v1`, `Authorization: Bearer <key>`. Lists take `limit`/`offset` and 
 |---|---|---|
 | `GET /me` | any | organization, plan, limits, key scope |
 | `GET/POST /keys`, `POST /keys/{id}/revoke`, `POST /keys/rotate` | full | key management |
-| `GET /usage?days=30` | full | requests, units, runs this month (included vs overage) |
+| `GET /usage?days=30` | full | requests, units, runs this month (`used`, `included`, `overage`, `hard_cap_runs`, `percent_used`, `resets`) |
 | `POST /projects` | any | get or create by name (ingest keys: lookup only) |
 | `GET /projects`, `GET/PATCH /projects/{p}` | full | projects and settings |
 | `GET /projects/{p}/overview`, `/audit` | full | dashboard numbers, audit log |
@@ -345,7 +405,10 @@ All under `/v1`, `Authorization: Bearer <key>`. Lists take `limit`/`offset` and 
 | `POST/GET /projects/{p}/versions`, `GET /versions/active?name=` | full / any | candidates; the active version is readable with ingest keys |
 | `POST /versions/{name}/{v}/approve`, `/reject`, `/activate` | full | release steps |
 | `POST /tenants`, `POST /admin/orgs/{id}/plan` | admin key | create organizations, change plans (payment webhook boundary) |
-| `GET /health` | none | liveness and database check |
+| `GET /plans` | none | plan limits and prices (smallest currency unit, per 30 days), `beta: true`; the landing page renders it |
+| `POST /access-requests` | none | ask for hosted access (rate-limited, always `202`) |
+| `GET /admin/access-requests?status=`, `POST /admin/access-requests/{id}/approve`, `/reject` | admin key | review the queue; approve creates the organization and returns its key once |
+| `GET` or `HEAD /health` | none | liveness and database check (`HEAD` for uptime monitors; `/`, `/dashboard` and the legal pages answer `HEAD` too) |
 
 Errors: `400` invalid, `401` bad or revoked key, `402` plan limit, `403` wrong scope, `404` not found (including
 another organization's data), `409` already decided, `413` body too large, `422` schema, `429` rate limit.
@@ -386,6 +449,7 @@ history) showed the loop working on a free model; learned lessons helped in one 
 | `SIA_MAX_BODY_BYTES` | `4194304` | larger bodies get `413` (chunked uploads included) |
 | `SIA_TRUSTED_PROXIES` | `127.0.0.1` | proxies whose `X-Forwarded-For`/`-Proto` are believed (`sia serve`) |
 | `SIA_ALLOWED_HOSTS` | unset | comma-separated hostnames; other `Host` headers get `400` |
+| `SIA_CONTACT_EMAIL` | unset | public contact address: the site's Contact links become `mailto:` (served at `/site-config.json`); unset = GitHub issues |
 | `SIA_LOCAL_MODE` | unset | `1` = no keys, loopback only (set by `sia dashboard`) |
 | `SIA_ALLOW_CUSTOM_BASE_URL` | unset | managed agents: allow custom LLM URLs and Ollama |
 | `HOST`, `PORT` | `127.0.0.1`, `8000` | `sia serve` |
@@ -399,16 +463,24 @@ Project settings (`sia.update_settings(...)`, `PATCH /projects/{p}`, or the dash
 | | Free | Pro | Team |
 |---|---|---|---|
 | Projects | 1 | 10 | 100 |
-| Runs / month | 10,000 (hard stop) | 250,000 + overage | 2,000,000 + overage |
+| Runs / month | 10,000 (hard stop) | 250,000, accepted up to 500,000 | 2,000,000, accepted up to 4,000,000 |
 | Examples per dataset | 200 | 5,000 | 50,000 |
 | Run retention | 14 days | 90 days | 365 days |
+
+Overage on paid plans is not billed during the beta, so ingest is refused at twice the included runs (`hard_cap`)
+until the first of the next month (UTC). The dashboard warns at 80% and 100% of the included runs.
 
 Local mode has no limits. Paid plans are bought through Razorpay (next section); an admin can also set a plan
 with no expiry via `POST /v1/admin/orgs/{id}/plan` or `sia set-plan`.
 
 **Database.** SQLite in WAL mode. Schema changes are numbered migrations applied automatically at startup (see
-`schema_migrations`); existing databases from earlier versions upgrade in place. Back up the file (or the Docker
-`/data` volume) like any database.
+`schema_migrations`); existing databases from earlier versions upgrade in place.
+
+**Backups.** `sia backup [--dir backups] [--keep 14]` copies the database safely while the server runs, checks the
+copy with `PRAGMA integrity_check` and keeps the newest N; `sia restore FILE` (server stopped) puts one back after
+saving the current file. Schedule the backup daily, or replicate continuously with Litestream
+(`examples/deploy/litestream.yml`). Step by step, with restore, key rotation and outages:
+[`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 ---
 

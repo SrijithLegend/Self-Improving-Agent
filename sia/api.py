@@ -30,10 +30,10 @@ from . import billing
 from . import security as sec
 from .agent import Agent
 from .llm import LLM, LLMError
-from .store import PLANS, Store
+from .store import PAID_PERIOD_DAYS, PLANS, Store
 
 app = FastAPI(title="SIA DevTools API", version="0.1.0",
-              description="Turn AI-agent failures into tested improvements: capture runs, verify feedback into "
+              description="A release gate for prompt changes: capture runs, verify feedback into "
                           "datasets, evaluate prompt versions and release them through an explicit approval step.")
 DB = os.getenv("SIA_DB", "sia.db")
 store, dev = Store(DB), DevStore(DB)
@@ -44,6 +44,7 @@ RATE_LIMIT = sec.env_int("SIA_RATE_LIMIT", 120)  # requests per organization per
 org_hits = sec.Window(RATE_LIMIT, 60)
 ip_hits = sec.Window(sec.env_int("SIA_IP_RATE_LIMIT", 600), 60)  # requests per client IP per minute
 auth_fails = sec.Window(sec.env_int("SIA_AUTH_FAIL_LIMIT", 20), 600)  # bad keys per IP per 10 min, then 429
+access_hits = sec.Window(5, 3600)  # access requests per client IP per hour
 llm_slots = sec.Slots(sec.env_int("SIA_LLM_CONCURRENCY_PER_ORG", 2), sec.env_int("SIA_LLM_CONCURRENCY", 16))
 log, seclog = logging.getLogger("sia.access"), logging.getLogger("sia.security")
 DASHBOARD = Path(__file__).with_name("dashboard.html")
@@ -167,6 +168,16 @@ def month_start():
     return datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
 
 
+def next_month_start():
+    d = datetime.fromtimestamp(month_start(), timezone.utc)
+    return d.replace(year=d.year + d.month // 12, month=d.month % 12 + 1)
+
+
+def run_cap(lim):
+    """Runs a month before ingest is refused: the included runs, or up to hard_cap times that on paid plans."""
+    return int(lim["runs_per_month"] * (lim.get("hard_cap", 1) if lim["overage"] else 1))
+
+
 def require_admin(request: Request, x_admin_key: str):
     admin = os.getenv("SIA_ADMIN_KEY", "")
     if problem := sec.admin_key_problem(admin):
@@ -222,6 +233,15 @@ def call(fn, *args, **kwargs):
 # --- request bodies: managed agents -------------------------------------------
 class TenantIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+
+
+class AccessRequestIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    email: str = Field(max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    name: str = Field(max_length=200, pattern=r"\S")
+    company: str = Field("", max_length=200)
+    use_case: str = Field("", max_length=2000)
+    website: str = Field("", max_length=500, description="Leave empty. It's hidden on the form: bots fill it in.")
 
 
 class AgentIn(BaseModel):
@@ -429,18 +449,25 @@ class VerifyIn(Strict):
 
 
 # --- service routes ------------------------------------------------------------
-@app.get("/dashboard", include_in_schema=False)
+@app.api_route("/dashboard", methods=["GET", "HEAD"], include_in_schema=False)
 def dashboard():
     return HTMLResponse(DASHBOARD_HTML, headers={"Content-Security-Policy": DASHBOARD_CSP, "Cache-Control": "no-store"})
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])  # HEAD: uptime monitors
 def health():
     try:
         store.q("SELECT 1")
     except Exception:
         return JSONResponse({"ok": False, "db": False}, 503)
     return {"ok": True, "db": True, "local_mode": LOCAL_MODE}
+
+
+@app.get("/site-config.json", include_in_schema=False)
+def site_config():
+    """Public settings the static pages read once (web/site.js): the contact address, or null."""
+    return JSONResponse({"contact_email": os.getenv("SIA_CONTACT_EMAIL", "").strip() or None},
+                        headers={"Cache-Control": "public, max-age=300"})
 
 
 @app.post("/v1/tenants", status_code=201)
@@ -457,6 +484,39 @@ def set_plan(org_id: str, body: PlanIn, request: Request, x_admin_key: str = Hea
     if not store.set_plan(org_id, body.plan):
         raise HTTPException(404, "Organization not found.")
     return {"org_id": org_id, "plan": body.plan, "limits": PLANS[body.plan]}
+
+
+# --- access requests: manual onboarding until there is self-serve signup ----------------
+@app.post("/v1/access-requests", status_code=202)
+def request_access(body: AccessRequestIn, request: Request):
+    """Ask for hosted access. The answer is always the same, so it never reveals whether an email is already known."""
+    if retry := access_hits.retry_after(client_ip(request)):
+        raise sec.too_many(retry, "Too many access requests from this address; try again later.")
+    if body.website:  # the hidden honeypot field: a bot filled it in, so store nothing
+        security_event(request, "access_request_honeypot")
+    else:
+        store.add_access_request(body.email, body.name, body.company, body.use_case)
+    return {"status": "received"}
+
+
+@app.get("/v1/admin/access-requests")
+def list_access_requests(request: Request, status: Literal["pending", "approved", "rejected"] | None = None,
+                         x_admin_key: str = Header(default="")):
+    require_admin(request, x_admin_key)
+    security_event(request, "access_requests_listed", status=status)
+    return store.access_requests(status)
+
+
+@app.post("/v1/admin/access-requests/{request_id}/{decision}")
+def decide_access_request(request_id: str, decision: Literal["approve", "reject"], request: Request,
+                          x_admin_key: str = Header(default="")):
+    """approve creates the organization and a full-scope key, returned once; reject only marks the request."""
+    require_admin(request, x_admin_key)
+    r = store.decide_access_request(request_id, decision == "approve")
+    if not r:
+        raise HTTPException(404, "No pending access request with that id.")
+    security_event(request, f"access_request_{r['status']}", access_request=request_id, org_id=r.get("org_id"))
+    return r
 
 
 # --- billing (Razorpay) ------------------------------------------------------------
@@ -539,6 +599,14 @@ async def razorpay_webhook(request: Request):
     return {"ok": True}  # 2xx for events we ignore too, so Razorpay doesn't retry them
 
 
+@app.get("/v1/plans")
+def plans():
+    """Public: plan limits and prices (smallest currency unit, per 30-day period), for the landing page."""
+    cfg = billing.settings()
+    return {"beta": True, "currency": cfg["currency"], "period_days": PAID_PERIOD_DAYS,
+            "plans": {name: {**lim, "price": cfg["prices"].get(name, 0)} for name, lim in PLANS.items()}}
+
+
 @app.get("/v1/me")
 def me(t=Depends(key_auth)):
     return {"org_id": t["id"], "name": t["name"], "plan": t["plan"], "limits": limits(t), "scope": t["scope"],
@@ -579,7 +647,10 @@ def usage(days: int = 30, t=Depends(tenant)):
     included = lim["runs_per_month"] if lim else None
     return {"days": days, "plan": t["plan"], "limits": lim, **store.usage(t["id"], time.time() - days * 86400),
             "runs_this_month": {"used": used, "included": included,
-                                "overage": max(0, used - included) if included is not None else 0}}
+                                "overage": max(0, used - included) if included is not None else 0,
+                                "hard_cap_runs": run_cap(lim) if lim else None,
+                                "percent_used": round(100 * used / included, 1) if included else None,
+                                "resets": next_month_start().timestamp()}}
 
 
 # --- DevTools: projects ----------------------------------------------------------
@@ -624,9 +695,10 @@ def audit(project_id: str, limit: int = 100, t=Depends(tenant)):
 def ingest_runs(project_id: str, body: RunsIn, t=Depends(key_auth)):
     """Insert or update runs by id; resending a batch is safe."""
     lim = limits(t)
-    if lim and not lim["overage"] and \
-            store.units_since(t["id"], "runs", month_start()) + len(body.runs) > lim["runs_per_month"]:
-        raise QuotaExceeded(f"Monthly run quota of the {t['plan']} plan ({lim['runs_per_month']}) reached.")
+    if lim and store.units_since(t["id"], "runs", month_start()) + len(body.runs) > run_cap(lim):
+        cap = f"{lim['runs_per_month']:,} runs" + (f", up to {run_cap(lim):,} with overage" if lim["overage"] else "")
+        raise QuotaExceeded(f"Monthly run limit of the {t['plan']} plan reached ({cap}). It resets on "
+                            f"{next_month_start():%d %B %Y} (UTC).")
     n = dev.log_runs(t["id"], project_id, [r.model_dump() for r in body.runs],
                      retention_days=lim["retention_days"] if lim else None)
     store.record_usage(t["id"], None, "runs", 0, units=n, project_id=project_id)
@@ -951,8 +1023,9 @@ if WEB.is_dir():  # a pip install ships the API without the landing page
     from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
 
-    @app.get("/privacy", include_in_schema=False)
-    @app.get("/terms", include_in_schema=False)
+    @app.api_route("/privacy", methods=["GET", "HEAD"], include_in_schema=False)
+    @app.api_route("/terms", methods=["GET", "HEAD"], include_in_schema=False)
+    @app.api_route("/refund", methods=["GET", "HEAD"], include_in_schema=False)
     def legal_page(request: Request):
         return FileResponse(WEB / f"{request.url.path.strip('/')}.html")
 

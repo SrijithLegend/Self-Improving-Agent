@@ -23,6 +23,7 @@
   --code-ink: #C3CBD6;
   --code-muted: #8C98A9;
   --backdrop: rgba(14, 27, 42, .45);
+  --danger: #A8321F;      /* form errors only: 6.4:1 on paper */
 
   /* the whole page uses four sizes */
   --t-display: clamp(40px, 4.4vw, 64px);
@@ -49,7 +50,7 @@
     --paper: #0F1620; --surface: #16202E; --surface-2: #1C2838; --ink: #EEF1F5; --ink-2: #C3CBD6;
     --muted: #8C98A9; --line: #2A3646; --accent: #3DB3A0; --accent-ink: #8FE0D2; --accent-soft: #123A35;
     --on-accent: #0A131E; /* white on #3DB3A0 is 2.6:1, so the dark CTA uses dark text (7.3:1) */
-    --signal: #F0B457; --hero-bg: #0A131E; --backdrop: rgba(0, 0, 0, .6);
+    --signal: #F0B457; --hero-bg: #0A131E; --backdrop: rgba(0, 0, 0, .6); --danger: #F28B78;
   }
 }
 :root[data-theme="dark"] {
@@ -57,7 +58,7 @@
   --paper: #0F1620; --surface: #16202E; --surface-2: #1C2838; --ink: #EEF1F5; --ink-2: #C3CBD6;
   --muted: #8C98A9; --line: #2A3646; --accent: #3DB3A0; --accent-ink: #8FE0D2; --accent-soft: #123A35;
   --on-accent: #0A131E;
-  --signal: #F0B457; --hero-bg: #0A131E; --backdrop: rgba(0, 0, 0, .6);
+  --signal: #F0B457; --hero-bg: #0A131E; --backdrop: rgba(0, 0, 0, .6); --danger: #F28B78;
 }
 
 /* --- base ----------------------------------------------------------------- */
@@ -73,7 +74,7 @@ h1, h2, h3 { font-family: var(--f-display); font-variation-settings: "opsz" 96, 
 p { margin: 0 0 16px; }
 a { color: var(--accent); }
 code { font-family: var(--f-mono); font-size: .9em; }
-button, input { font: inherit; color: inherit; }
+button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 [tabindex="-1"]:focus { outline: none; } /* headings focused after an in-page jump */
@@ -218,7 +219,7 @@ h1 { font-size: var(--t-display); line-height: 1.08; letter-spacing: -.02em; mar
 .providers svg { width: 28px; height: 28px; fill: var(--ink-2); display: block; }
 .chip-name { display: inline-flex; align-items: center; height: 28px; padding: 0 8px; border: 1px solid var(--line); font: 500 var(--t-small) var(--f-mono); color: var(--ink-2); }
 
-/* hero: a labeled diagram of the three loops. The amber token is the page's only animation. */
+/* hero: a labeled diagram of the five-step loop. The amber token is the page's only animation. */
 .hero { margin: 64px 0 0; }
 .hero-frame { --bracket: var(--signal); background: var(--hero-bg); padding: 16px; }
 .loops { display: block; width: 100%; height: auto; font-family: var(--f-mono); }
@@ -226,22 +227,22 @@ h1 { font-size: var(--t-display); line-height: 1.08; letter-spacing: -.02em; mar
 .loops .ring.lesson { stroke: var(--loop-amber); stroke-dasharray: 2 10; stroke-linecap: square; }
 .loops .node { fill: var(--hero-bg); stroke: var(--loop-teal); stroke-width: 2; }
 .loops .node.amber { stroke: var(--loop-amber); }
-.loops .core { fill: var(--loop-amber); }
 .loops .token { fill: var(--loop-amber); }
 .loops text { fill: var(--on-dark); font-size: 22px; }
 .loops .ring-name { fill: var(--loop-teal); letter-spacing: .14em; text-transform: uppercase; }
 .loops .ring-name.amber { fill: var(--loop-amber); }
-.loops .core-label { fill: var(--code-muted); letter-spacing: .14em; text-transform: uppercase; }
+.loops .sub { fill: var(--code-muted); }
 .hero figcaption { margin-top: 14px; color: var(--muted); font-size: var(--t-small); max-width: 72ch; }
 
 /* --- sections ------------------------------------------------------------- */
 section { margin-top: 96px; padding-top: 32px; border-top: 1px solid var(--line); scroll-margin-top: 24px; }
 section h2 { font-size: var(--t-title); line-height: 1.15; letter-spacing: -.01em; margin-bottom: 24px; }
 section > p { max-width: 64ch; color: var(--ink-2); }
+section > h3 { font-size: var(--t-body); font-family: var(--f-body); font-weight: 600; margin: 40px 0 10px; }
 
 .cards { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
 
-/* How it learns: three steps in order, each with the real response it produced */
+/* How it works: the steps in order, each with the real result it produced */
 .steps { list-style: none; margin: 8px 0 0; padding: 0; }
 .steps > li { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 0 16px; padding: 24px 0; border-bottom: 1px solid var(--line); }
 .steps > li:first-child { padding-top: 8px; }
@@ -257,6 +258,10 @@ section > p { max-width: 64ch; color: var(--ink-2); }
 .card { border: 1px solid var(--line); padding: 24px; background: var(--surface); min-width: 0; }
 .card h3 { font-size: var(--t-title); line-height: 1.1; margin: 12px 0 10px; }
 .card p { color: var(--ink-2); margin: 0; }
+.plan .price { margin: 0 0 12px; color: var(--ink); font: 500 var(--t-body) var(--f-mono); }
+.plan .per { color: var(--muted); font-size: var(--t-small); }
+.limits { list-style: none; margin: 16px 0 0; padding: 16px 0 0; border-top: 1px solid var(--line); display: grid; gap: 6px;
+  font: 400 var(--t-small) var(--f-mono); color: var(--ink-2); }
 .step { font: 500 var(--t-small) var(--f-mono); color: var(--accent); letter-spacing: .14em; text-transform: uppercase; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 20px 0 0; padding: 0; }
 .chips li { padding: 6px 12px; border: 1px solid var(--line); font: 400 var(--t-small) var(--f-mono); color: var(--ink-2); background: var(--paper); }
@@ -290,18 +295,35 @@ thead th { font: 500 var(--t-small) var(--f-mono); text-transform: uppercase; le
 tbody th { font-weight: 500; }
 td { font-family: var(--f-mono); font-size: var(--t-small); white-space: nowrap; }
 
-.notify { display: flex; margin-top: 20px; }
 .notify-note { margin: 10px 0 0; color: var(--muted); font-size: var(--t-small); }
-.notify input {
-  flex: 1; min-width: 0; height: 48px; padding: 0 12px; border: 1px solid var(--line); border-right: 0; background: var(--paper); color: var(--ink);
+
+.card-link { margin-top: 16px; }
+.card-link a { font: 500 var(--t-small) var(--f-mono); text-transform: uppercase; letter-spacing: .12em; }
+
+/* request access form */
+.access { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 16px; max-width: 640px; margin-top: 8px; }
+.field { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.field.wide { grid-column: 1 / -1; }
+.field label { font-size: var(--t-small); font-weight: 500; color: var(--ink); }
+.field .opt { color: var(--muted); font-weight: 400; }
+.field input, .field textarea {
+  width: 100%; padding: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--ink);
 }
-.notify input::placeholder { color: var(--muted); }
-.notify input:focus-visible { outline-offset: -2px; }
-.notify button {
-  height: 48px; padding: 0 18px; border: 0; background: var(--accent); color: var(--on-accent);
+.field input { height: 48px; }
+.field textarea { resize: vertical; min-height: 104px; }
+.field input:focus-visible, .field textarea:focus-visible { outline-offset: -2px; }
+.field [aria-invalid="true"] { border-color: var(--danger); }
+.field-err, .form-status[data-kind="error"] { color: var(--danger); }
+.field-err, .hint, .form-status { margin: 0; font-size: var(--t-small); }
+.hint { color: var(--muted); }
+.form-status[data-kind="ok"] { color: var(--accent-ink); }
+.access-send {
+  justify-self: start; height: 48px; padding: 0 22px; border: 0; background: var(--accent); color: var(--on-accent);
   font: 500 var(--t-small) var(--f-mono); text-transform: uppercase; letter-spacing: .12em;
 }
-.notify button:hover { background: var(--accent-ink); color: var(--paper); }
+.access-send:hover { background: var(--accent-ink); color: var(--paper); }
+.access-send:disabled { opacity: .6; cursor: progress; }
+.hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }  /* honeypot: off-screen, not display:none */
 
 /* --- agent view ----------------------------------------------------------- */
 .agent-view { display: none; }
@@ -364,7 +386,7 @@ td { font-family: var(--f-mono); font-size: var(--t-small); white-space: nowrap;
   section { scroll-margin-top: 88px; } /* clear the 64px top bar */
 }
 @media (max-width: 767px) {
-  .cards { grid-template-columns: 1fr; }
+  .cards, .access { grid-template-columns: 1fr; }
   .steps > li { grid-template-columns: minmax(0, 1fr); }
   .steps .step { padding: 0 0 6px; }
 }

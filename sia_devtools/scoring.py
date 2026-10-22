@@ -135,6 +135,9 @@ def compare_scores(old, new, critical=None, policy=None, ids=None):
     gain = mean(gains) if gains else 0.0
     se = stdev(gains) / n ** 0.5 if n > 1 else 0.0
     threshold = max(p["min_gain"], p["z"] * se)
+    # one improved example out of n gives gain == SE exactly, so without a tolerance a tie with z*SE was decided
+    # by floating-point rounding ("improved" at n=10, "inconclusive" at n=7). A tie is not an improvement.
+    tie = 1e-9
     tol = p["regression_tolerance"]
     regressions = [i for i, g in zip(ids, gains) if g < -tol]
     crit = [i for i, g, c in zip(ids, gains, critical) if c and g < -tol]
@@ -147,9 +150,9 @@ def compare_scores(old, new, critical=None, policy=None, ids=None):
     elif p["max_regressions"] is not None and len(regressions) > p["max_regressions"]:
         verdict, reason = "regressed", (f"{len(regressions)} example(s) regressed, more than the "
                                         f"{p['max_regressions']} allowed")
-    elif gain > threshold:
+    elif gain > threshold + tie:
         verdict, reason = "improved", f"mean gain {gain:+.3f} beats the threshold {threshold:.3f} (max of min_gain, z*SE)"
-    elif gain < -threshold:
+    elif gain < -threshold - tie:
         verdict, reason = "regressed", f"mean change {gain:+.3f} is below -{threshold:.3f}"
     elif p["z"] * se > p["min_gain"]:
         verdict, reason = "inconclusive", f"mean change {gain:+.3f} is within evaluation noise (z*SE = {p['z'] * se:.3f})"

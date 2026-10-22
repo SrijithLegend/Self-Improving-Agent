@@ -33,7 +33,7 @@ Fonts.
 
 ## Checked
 
-- `pytest`: `GET /` returns 200 and contains `self-improving`; `/docs`, `/health`, `/v1/me`, `/dashboard`,
+- `pytest`: `GET /` returns 200 with the DevTools H1 and without the old one; `/docs`, `/health`, `/v1/me`, `/dashboard`,
   `/agent.md` and `/llms.txt` still answer.
 - Lighthouse 12.6 (desktop, mobile, and mobile in dark mode): accessibility 100, best practices 100, SEO 100.
 - In Chrome: the toggle by mouse and arrow keys, which survives a reload and sets `?view=agent`; the scroll-spy
@@ -54,9 +54,10 @@ Fonts.
 - **Dashboard moved to `/dashboard`.** `/` is now the landing page. `sia dashboard` prints the new URL.
 - **Static path** is resolved from the package (`<repo>/web`), not the working directory, and the mount is skipped
   when the folder is missing (a `pip install` of the SDK ships no landing page).
-- **Results** shows the two six-example runs of `examples/demo.py`, from the README in git history (commit
-  `4aba204`), because the required caption talks about six examples. The later 12-example runs aren't on the
-  page.
+- **One product.** The page sells SIA DevTools, as the README does (LAUNCH_SPEC Task 1). The managed agents API
+  still exists and is documented in the README, but it isn't marketed here.
+- **Results** is the README "Demo results" table for `examples/devtools_demo.py`, shortened to five rows, with its
+  "What this does and does not show" caveat.
 - **Pricing.** The Self-host card names the project license, FSL-1.1-ALv2 (`LICENSE.md`). No prices are shown for
   hosted.
 - **Hosted waitlist** opens a `mailto:` addressed to `<body data-contact="">`. It's empty by default, so the
@@ -65,13 +66,12 @@ Fonts.
   inlined with `title` and `aria-label` and drawn in the page's ink color. Simple Icons has no Groq mark, so Groq
   is a mono text chip.
 - **Cursor prompt variant** is the Claude Code prompt wrapped as a Cursor project rule (frontmatter, so it can be
-  saved as `.cursor/rules/sia.mdc`). The **curl** variant is the `sia()` helper and the six calls from the README.
-- **Hero.** A static, labeled SVG diagram of the three loops (DESIGN_RULES Appendix A). The one animation is an
-  amber square, a lesson, that travels through loop 1, into loop 2 and on into loop 3 every 14 s. It pauses
-  off-screen or in a hidden tab, and rests between loops 1 and 2 under reduced motion.
-- **How it learns** is three steps in order, each with real output: two `/run` responses from
-  `gemini-flash-latest` on the `examples/demo.py` refund policy (21 October 2026), and the two real `/improve`
-  decisions from the Results table.
+  saved as `.cursor/rules/sia.mdc`). The **Shell** variant is the install, demo, dashboard and gate commands.
+- **Hero.** A static, labeled SVG diagram of the five steps (capture, feedback, dataset, eval, release). The one
+  animation is an amber square, one failed run, that travels from capture to release every 14 s. It pauses
+  off-screen or in a hidden tab, and rests between feedback and dataset under reduced motion.
+- **How it works** is five steps in order, each with the real result it produced in the README demo run of
+  `examples/devtools_demo.py` (20 October 2026). The excerpts are result fields, not raw terminal output.
 - **Scroll-spy.** The `IntersectionObserver` (rootMargin `-40% 0px -55% 0px`) triggers an update, and the update
   picks the last section whose top is above the band; Pricing becomes active once the page bottom is reached.
   Firing only on intersection skipped sections on fast scrolls and could never reach the last short section.

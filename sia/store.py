@@ -53,6 +53,11 @@ CREATE TABLE IF NOT EXISTS payments (order_id TEXT PRIMARY KEY, org_id TEXT NOT 
     amount INTEGER NOT NULL, currency TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created', payment_id TEXT,
     created REAL, paid REAL);
 CREATE INDEX IF NOT EXISTS idx_payments_org ON payments(org_id, created)
+"""), ("legacy-003-access-requests", """
+CREATE TABLE IF NOT EXISTS access_requests (id TEXT PRIMARY KEY, email TEXT NOT NULL, name TEXT NOT NULL,
+    company TEXT NOT NULL DEFAULT '', use_case TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
+    org_id TEXT, created REAL NOT NULL, decided REAL);
+CREATE INDEX IF NOT EXISTS idx_access_requests ON access_requests(status, email)
 """)]
 PAID_PERIOD_DAYS = 30  # one payment buys this many days of a paid plan
 
@@ -61,10 +66,12 @@ PLANS = {
     "free": {"projects": 1, "runs_per_month": 10_000, "examples_per_dataset": 200, "retention_days": 14,
              "overage": False},
     "pro": {"projects": 10, "runs_per_month": 250_000, "examples_per_dataset": 5_000, "retention_days": 90,
-            "overage": True},
+            "overage": True, "hard_cap": 2.0},
     "team": {"projects": 100, "runs_per_month": 2_000_000, "examples_per_dataset": 50_000, "retention_days": 365,
-             "overage": True},
+             "overage": True, "hard_cap": 2.0},
 }
+# hard_cap: paid plans may go past their included runs up to this multiple. Overage isn't billed during the beta,
+# so without a cap a paid plan would be unlimited.
 KEY_SCOPES = ("full", "ingest")  # ingest: send runs and feedback, read the active prompt; nothing else
 
 PRIOR, PRIOR_WEIGHT = 0.7, 2  # new lessons start with a mildly optimistic utility
@@ -130,9 +137,14 @@ class Store:
 
     # --- tenants (organizations) and API keys --------------------------------
     def create_tenant(self, name, plan="free"):
+        with self._conn() as c:
+            return self._new_tenant(c, name, plan)
+
+    def _new_tenant(self, c, name, plan="free"):
+        """The organization and its first full-scope key, on connection c (one transaction)."""
         tid = uuid.uuid4().hex
-        self.x("INSERT INTO tenants (id, name, created, plan) VALUES (?,?,?,?)", tid, name, time.time(), plan)
-        return {"tenant_id": tid, "name": name, "api_key": self.create_key(tid, "default")["api_key"]}
+        c.execute("INSERT INTO tenants (id, name, created, plan) VALUES (?,?,?,?)", (tid, name, time.time(), plan))
+        return {"tenant_id": tid, "name": name, "api_key": self._new_key(c, tid, "default")["api_key"]}
 
     # a paid plan whose period ran out falls back to free
     PLAN_SQL = "CASE WHEN t.paid_until IS NOT NULL AND t.paid_until < ? THEN 'free' ELSE t.plan END"
@@ -178,11 +190,16 @@ class Store:
 
     def create_key(self, tenant_id, name="key", scope="full"):
         """Keys are stored only as SHA-256 hashes; the plaintext is returned once, here."""
+        with self._conn() as c:
+            return self._new_key(c, tenant_id, name, scope)
+
+    @staticmethod
+    def _new_key(c, tenant_id, name="key", scope="full"):
         if scope not in KEY_SCOPES:
             raise ValueError(f"scope must be one of {KEY_SCOPES}")
         key, kid = "sia_" + secrets.token_urlsafe(32), uuid.uuid4().hex[:16]
-        self.x("INSERT INTO api_keys (id, org_id, name, prefix, key_hash, scope, created) VALUES (?,?,?,?,?,?,?)",
-               kid, tenant_id, name, key[:8], hash_key(key), scope, time.time())
+        c.execute("INSERT INTO api_keys (id, org_id, name, prefix, key_hash, scope, created) VALUES (?,?,?,?,?,?,?)",
+                  (kid, tenant_id, name, key[:8], hash_key(key), scope, time.time()))
         return {"id": kid, "name": name, "scope": scope, "prefix": key[:8], "api_key": key}
 
     def keys(self, tenant_id):
@@ -212,6 +229,37 @@ class Store:
         self.x("UPDATE api_keys SET last_used=? WHERE id=? AND (last_used IS NULL OR last_used<?)",
                now, rows[0]["key_id"], now - 60)
         return rows[0]
+
+    # --- access requests (manual onboarding) ---------------------------------
+    def add_access_request(self, email, name, company="", use_case=""):
+        """Store a request unless the same email already has one pending. Returns True if a row was added."""
+        email = email.strip().lower()
+        with self._conn() as c:
+            if c.execute("SELECT 1 FROM access_requests WHERE email=? AND status='pending'", (email,)).fetchone():
+                return False
+            c.execute("INSERT INTO access_requests (id, email, name, company, use_case, created) VALUES (?,?,?,?,?,?)",
+                      (uuid.uuid4().hex, email, name.strip(), company.strip(), use_case.strip(), time.time()))
+        return True
+
+    def access_requests(self, status=None, limit=500):
+        return self.q("SELECT * FROM access_requests" + (" WHERE status=?" if status else "") +
+                      " ORDER BY created LIMIT ?", *([status] if status else []), limit)
+
+    def decide_access_request(self, request_id, approve):
+        """pending -> approved (creates the organization and its first full-scope key) | rejected. Returns None if
+        the request is missing or was already decided, so an approval can never create two organizations. One
+        transaction: if creating the organization fails, the request stays pending."""
+        with self._conn() as c:
+            if not c.execute("UPDATE access_requests SET status=?, decided=? WHERE id=? AND status='pending'",
+                             ("approved" if approve else "rejected", time.time(), request_id)).rowcount:
+                return None
+            if not approve:
+                return {"id": request_id, "status": "rejected"}
+            r = c.execute("SELECT * FROM access_requests WHERE id=?", (request_id,)).fetchone()
+            org = self._new_tenant(c, r["company"] or r["name"])
+            c.execute("UPDATE access_requests SET org_id=? WHERE id=?", (org["tenant_id"], request_id))
+        return {"id": request_id, "status": "approved", "email": r["email"], "org_id": org["tenant_id"],
+                "org_name": org["name"], "api_key": org["api_key"]}  # the key is shown only once
 
     # --- agents --------------------------------------------------------------
     def create_agent(self, tenant_id, name, domain, instructions="", rubric=""):
