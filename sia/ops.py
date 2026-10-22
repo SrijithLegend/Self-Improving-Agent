@@ -1,4 +1,4 @@
-"""Operator commands for a hosted server: backup, restore, maintenance, doctor. Called by the `sia` CLI (sia_devtools/cli.py).
+"""Operator commands for a hosted server: backup, restore, maintenance, doctor, logcheck. Called by the `sia` CLI (sia_devtools/cli.py).
 
 Each returns an exit code and prints what it did; errors raise OpsError (exit 4).
 """
@@ -6,7 +6,9 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import time
+from collections import Counter
 from contextlib import closing
 from pathlib import Path
 
@@ -189,6 +191,38 @@ def _db_check(db):
     return "PASS", "DB", f"{db} writable, integrity ok"
 
 
+def logcheck(lines, minutes=10, max_error_rate=0.05, min_requests=20, max_security_events=None, now=None):
+    """Read the server's JSON log lines (from `docker logs` or a file) and alert when, within the last `minutes`,
+    more than max_error_rate of requests were 5xx (once there are at least min_requests), or when there were more
+    than max_security_events security events. Prints one JSON line; returns 1 to alert, 0 otherwise."""
+    now, since = now or time.time(), (now or time.time()) - minutes * 60
+    requests = errors = 0
+    events = Counter()
+    for line in lines:
+        start = line.find("{")  # tolerate prefixes such as docker timestamps
+        try:
+            d = json.loads(line[start:]) if start >= 0 else None
+        except ValueError:
+            continue
+        if not isinstance(d, dict) or not isinstance(d.get("ts"), (int, float)) or d["ts"] < since:
+            continue
+        if isinstance(d.get("status"), int):
+            requests += 1
+            errors += d["status"] >= 500
+        elif isinstance(d.get("event"), str):
+            events[d["event"]] += 1
+    rate = errors / requests if requests else 0.0
+    reasons = []
+    if requests >= min_requests and rate > max_error_rate:
+        reasons.append(f"5xx rate {rate:.1%} over {max_error_rate:.1%}")
+    if max_security_events is not None and sum(events.values()) > max_security_events:
+        reasons.append(f"{sum(events.values())} security events over {max_security_events}")
+    print(json.dumps({"ts": round(now, 3), "event": "logcheck", "minutes": minutes, "requests": requests,
+                      "errors_5xx": errors, "error_rate": round(rate, 4), "security_events": dict(events),
+                      "alert": bool(reasons), "reasons": reasons}))
+    return 1 if reasons else 0
+
+
 # --- CLI entry points (argparse namespaces from sia_devtools/cli.py) ---------------------------------------------
 def backup_cmd(a):
     return backup(a.db, a.dir, a.keep)
@@ -201,6 +235,13 @@ def restore_cmd(a):
 
 def maintenance_cmd(a):
     return maintenance(a.db)
+
+
+def logcheck_cmd(a):
+    if a.file == "-":
+        return logcheck(sys.stdin, a.minutes, a.max_error_rate, a.min_requests, a.max_security_events)
+    with open(a.file, encoding="utf-8", errors="replace") as f:
+        return logcheck(f, a.minutes, a.max_error_rate, a.min_requests, a.max_security_events)
 
 
 def doctor_cmd(a):

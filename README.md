@@ -262,6 +262,7 @@ sia backup        [--dir backups] [--keep 14] [--db]     safe online copy + inte
 sia restore       FILE [--db]                             server stopped; saves the current DB first
 sia maintenance   [--db]                                  daily retention job; one JSON line of counts
 sia doctor        [--db] [--backup-dir backups]           launch readiness: PASS / WARN / FAIL, exit 1 on a FAIL
+sia logcheck      [FILE|-] [--minutes 10] [--max-error-rate 0.05]   alert on 5xx rate in the JSON logs, exit 1
 ```
 
 Common options: `--project` (`SIA_PROJECT`), `--api-key` (`SIA_API_KEY`), `--base-url` (`SIA_BASE_URL`),
@@ -460,6 +461,7 @@ history) showed the loop working on a free model; learned lessons helped in one 
 | `SIA_TRUSTED_PROXIES` | `127.0.0.1` | proxies whose `X-Forwarded-For`/`-Proto` are believed (`sia serve`) |
 | `SIA_ALLOWED_HOSTS` | unset | comma-separated hostnames; other `Host` headers get `400` |
 | `SIA_CONTACT_EMAIL` | unset | public contact address: the site's Contact links become `mailto:` (served at `/site-config.json`); unset = GitHub issues |
+| `SENTRY_DSN`, `SENTRY_ENVIRONMENT` | unset, `production` | optional error reporting (`pip install "sia-devtools[sentry]"`): unhandled errors only, headers and bodies stripped |
 | `SIA_LOCAL_MODE` | unset | `1` = no keys, loopback only (set by `sia dashboard`) |
 | `SIA_ALLOW_CUSTOM_BASE_URL` | unset | managed agents: allow custom LLM URLs and Ollama |
 | `HOST`, `PORT` | `127.0.0.1`, `8000` | `sia serve` |
