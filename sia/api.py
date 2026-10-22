@@ -80,6 +80,9 @@ def sentry_scrub(event, hint=None):
         if "url" in event["request"]:
             event["request"]["url"] = str(event["request"]["url"]).split("?", 1)[0]
     event.pop("user", None)
+    for exc in (event.get("exception") or {}).get("values") or []:  # frame locals hold keys and run inputs
+        for frame in (exc.get("stacktrace") or {}).get("frames") or []:
+            frame.pop("vars", None)
     return event
 
 
@@ -89,6 +92,7 @@ if os.getenv("SENTRY_DSN"):  # optional error reporting (pip install "sia-devtoo
         import sentry_sdk as sentry
         sentry.init(dsn=os.environ["SENTRY_DSN"], send_default_pii=False, traces_sample_rate=0,
                     default_integrations=False, before_send=sentry_scrub,
+                    include_local_variables=False, max_request_body_size="never",
                     environment=os.getenv("SENTRY_ENVIRONMENT", "production"))
     except ImportError:
         sentry = None
