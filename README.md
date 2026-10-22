@@ -62,6 +62,9 @@ What makes it different from a tracing tool:
 pip install "sia-devtools[server] @ git+https://github.com/SrijithLegend/Self-Improving-Agent"
 ```
 
+The package is ready for PyPI (`pip install "sia-devtools[server]"` once the first release is published; see
+[`docs/RELEASING.md`](docs/RELEASING.md)). The SDK alone needs only `httpx`; `[server]` adds the API and dashboard.
+
 Or from a clone: `pip install -e ".[dev]"`, then `python -m pytest` should pass (the badge above shows CI).
 
 **1. Instrument the function you already have.** No framework, no rewrite:
@@ -75,6 +78,10 @@ sia = SIAClient(project="my-ai-agent")      # local mode: writes to sia_local.db
 def answer(question: str) -> str:
     return my_existing_agent(question)
 ```
+
+Async apps work the same way: put `@sia.trace` on an `async def`. Recording never waits on the network. In hosted
+mode runs are queued and sent in batches by a background thread, so your event loop isn't blocked; concurrent tasks
+each keep their own run tree. In local mode each finished run is one small SQLite write.
 
 Need more control? Use a run directly:
 

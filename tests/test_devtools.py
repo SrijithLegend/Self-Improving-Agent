@@ -2,6 +2,7 @@
 Everything runs offline with deterministic fakes; no API keys needed."""
 import dataclasses
 import importlib
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -105,10 +106,14 @@ def test_trace_records_errors_and_reraises(sia):
         return 2 * x
     assert double(4) == 8 and sia.runs(name="double")[0]["output"] == 8
 
-    with pytest.raises(TypeError):
-        @sia.trace
-        async def nope():
-            pass
+    # async functions are traced too (they used to raise TypeError; full coverage in test_improvements.py)
+    import asyncio
+
+    @sia.trace("triple")
+    async def triple(x):
+        return x * 3
+    assert inspect.iscoroutinefunction(triple) and asyncio.run(triple(4)) == 12
+    assert sia.runs(name="triple")[0]["output"] == 12
 
 
 def test_prompt_version_is_recorded_on_runs(sia):

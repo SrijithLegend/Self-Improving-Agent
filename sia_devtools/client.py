@@ -320,14 +320,13 @@ class SIAClient:
     def trace(self, name: "str | Callable | None" = None, *, tags: list[str] | None = None,
               capture_input: bool = True, capture_output: bool = True):
         """Decorator: record each call of a function as a run (arguments in, return value out, exceptions as
-        errors, which are re-raised unchanged). Works bare (@sia.trace) or with options (@sia.trace("name"))."""
+        errors, which are re-raised unchanged). Works bare (@sia.trace) or with options (@sia.trace("name")), on
+        regular and async functions. Recording never waits on the network: hosted mode sends from a background
+        thread, so an async app's event loop isn't blocked (local mode writes one SQLite row when the run ends)."""
         def deco(fn):
-            if inspect.iscoroutinefunction(fn):
-                raise TypeError("sia.trace supports regular functions; async support is not implemented yet.")
             sig = inspect.signature(fn)
 
-            @functools.wraps(fn)
-            def wrapper(*args, **kwargs):
+            def run_for(args, kwargs):
                 inp = None
                 if capture_input:
                     try:
@@ -336,7 +335,21 @@ class SIAClient:
                         inp = {k: v for k, v in bound.arguments.items() if k not in ("self", "cls")}
                     except TypeError:
                         inp = {"args": args, "kwargs": kwargs}
-                with self.start_run(label or fn.__qualname__, inp, tags=tags) as run:
+                return self.start_run(label or fn.__qualname__, inp, tags=tags)
+
+            if inspect.iscoroutinefunction(fn):
+                @functools.wraps(fn)
+                async def awrapper(*args, **kwargs):
+                    with run_for(args, kwargs) as run:  # the current run is a contextvar: each asyncio task has its own
+                        out = await fn(*args, **kwargs)
+                        if capture_output:
+                            run.log_output(out)
+                        return out
+                return awrapper
+
+            @functools.wraps(fn)
+            def wrapper(*args, **kwargs):
+                with run_for(args, kwargs) as run:
                     out = fn(*args, **kwargs)
                     if capture_output:
                         run.log_output(out)

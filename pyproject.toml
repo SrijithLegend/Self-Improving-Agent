@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,8 +8,26 @@ version = "0.1.0"
 description = "A release gate for prompt changes: traces, verified feedback, versioned datasets, paired evaluations and a CI regression gate."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "FSL-1.1-ALv2" }
+license = "FSL-1.1-ALv2"
+license-files = ["LICENSE.md"]
+authors = [{ name = "Srijith" }]
+keywords = ["llm", "prompt", "evaluation", "regression testing", "ci", "release gate", "tracing"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = ["httpx>=0.27"]
+
+[project.urls]
+Homepage = "https://github.com/SrijithLegend/Self-Improving-Agent"
+Documentation = "https://github.com/SrijithLegend/Self-Improving-Agent#readme"
+Issues = "https://github.com/SrijithLegend/Self-Improving-Agent/issues"
+License = "https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/LICENSE.md"
 
 [project.optional-dependencies]
 server = ["fastapi>=0.110", "uvicorn>=0.29", "pydantic>=2", "python-dotenv>=1"]

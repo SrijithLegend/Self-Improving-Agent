@@ -3,7 +3,7 @@
 > Records an AI app's runs, turns reviewer-verified corrections into versioned test cases, and compares prompt versions on the same examples so a change ships only with a measured win. Local-first (SQLite, no account); optional hosted API. SIA never retrains a model and never edits code; it versions prompts.
 
 Python SDK and CLI: pip install "sia-devtools[server] @ git+https://github.com/SrijithLegend/Self-Improving-Agent"
-Local mode: SIAClient(project="...") with no key writes to sia_local.db. Hosted mode: SIAClient(api_key=..., base_url=...).
+Local mode: SIAClient(project="...") with no key writes to sia_local.db. @sia.trace works on regular and async functions; hosted mode sends from a background thread. Hosted mode: SIAClient(api_key=..., base_url=...).
 Hosted auth: Authorization: Bearer <SIA key>. Keys have scope "full" or "ingest" (ingest: send runs and feedback, read the active prompt).
 
 ## Core SDK calls

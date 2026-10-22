@@ -97,3 +97,39 @@ def test_project_setting_redacts_aadhaar_before_storage(tmp_path):
     ds = sia.dataset("d")
     ds.add_example({"question": f"Update my Aadhaar {good} and PAN ABCPE1234F"}, "OK")
     assert ds.examples()[0]["input"] == {"question": "Update my Aadhaar [REDACTED:aadhaar] and PAN [REDACTED:pan]"}
+
+
+# --- 5. async apps can trace -------------------------------------------------------------------------------------
+def test_trace_works_on_async_functions_with_concurrent_tasks(tmp_path):
+    import asyncio
+
+    import pytest
+    sia = SIAClient(project="p", local=str(tmp_path / "local.db"))
+
+    @sia.trace
+    async def retrieve(q):
+        await asyncio.sleep(0.01)
+        return f"docs for {q}"
+
+    @sia.trace("answer")
+    async def answer(q):
+        docs = await retrieve(q)
+        if q == "boom":
+            raise ValueError("model timed out")
+        return f"{q}: {docs}"
+
+    async def main():
+        out = await asyncio.gather(answer("a"), answer("b"), answer("c"))
+        with pytest.raises(ValueError):
+            await answer("boom")
+        return out
+
+    assert asyncio.run(main()) == ["a: docs for a", "b: docs for b", "c: docs for c"]
+    runs = sia.runs(limit=50)
+    roots = {r["input"]["q"]: r for r in runs if r["name"] == "answer"}
+    children = [r for r in runs if r["name"].endswith("retrieve")]
+    assert set(roots) == {"a", "b", "c", "boom"} and len(children) == 4
+    for child in children:  # each concurrent task's child points at its own parent, not a sibling's
+        assert roots[child["input"]["q"]]["id"] == child["parent_id"]
+    assert roots["boom"]["status"] == "error" and "model timed out" in roots["boom"]["error"]
+    assert roots["a"]["output"] == "a: docs for a" and roots["a"]["status"] == "success"
