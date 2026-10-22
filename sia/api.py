@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import secrets
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
@@ -47,6 +48,12 @@ auth_fails = sec.Window(sec.env_int("SIA_AUTH_FAIL_LIMIT", 20), 600)  # bad keys
 access_hits = sec.Window(5, 3600)  # access requests per client IP per hour
 llm_slots = sec.Slots(sec.env_int("SIA_LLM_CONCURRENCY_PER_ORG", 2), sec.env_int("SIA_LLM_CONCURRENCY", 16))
 log, seclog = logging.getLogger("sia.access"), logging.getLogger("sia.security")
+if not logging.getLogger("sia").handlers:  # without a handler, Python drops INFO: the access lines never appeared
+    _out = logging.StreamHandler(sys.stdout)
+    _out.setFormatter(logging.Formatter("%(message)s"))  # the lines are JSON already
+    logging.getLogger("sia").addHandler(_out)
+    logging.getLogger("sia").setLevel(logging.INFO)
+    logging.getLogger("sia").propagate = False
 DASHBOARD = Path(__file__).with_name("dashboard.html")
 DASHBOARD_HTML = DASHBOARD.read_text(encoding="utf-8")
 DASHBOARD_CSP = sec.dashboard_csp(DASHBOARD_HTML)
@@ -62,6 +69,31 @@ if os.getenv("SIA_ALLOWED_HOSTS"):
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[h.strip() for h in os.environ["SIA_ALLOWED_HOSTS"]
                        .split(",") if h.strip()] + ["127.0.0.1", "localhost"])  # localhost: the health check
 app.add_middleware(sec.BodyLimit, max_bytes=MAX_BODY)
+
+
+def sentry_scrub(event, hint=None):
+    """Keep only the method and path of a request: headers carry API, admin and model keys, bodies carry customer
+    data, query strings can carry either."""
+    req = event.get("request")
+    if isinstance(req, dict):
+        event["request"] = {k: req[k] for k in ("method", "url") if k in req}
+        if "url" in event["request"]:
+            event["request"]["url"] = str(event["request"]["url"]).split("?", 1)[0]
+    event.pop("user", None)
+    return event
+
+
+sentry = None
+if os.getenv("SENTRY_DSN"):  # optional error reporting (pip install "sia-devtools[sentry]")
+    try:
+        import sentry_sdk as sentry
+        sentry.init(dsn=os.environ["SENTRY_DSN"], send_default_pii=False, traces_sample_rate=0,
+                    default_integrations=False, before_send=sentry_scrub,
+                    environment=os.getenv("SENTRY_ENVIRONMENT", "production"))
+    except ImportError:
+        sentry = None
+        logging.getLogger("sia.security").warning("SENTRY_DSN is set but sentry-sdk isn't installed; "
+                                                  "pip install 'sia-devtools[sentry]'")
 if not LOCAL_MODE and sec.admin_key_problem(os.getenv("SIA_ADMIN_KEY", "")):
     seclog.warning("admin API disabled: %s", sec.admin_key_problem(os.getenv("SIA_ADMIN_KEY", "")))
 
@@ -99,6 +131,11 @@ async def guard_and_log(request: Request, call_next):
             response = await call_next(request)
         except Exception:  # never send a stack trace to the client; the request id finds it in the log
             log.exception("unhandled error, request_id=%s", request.state.request_id)
+            if sentry:
+                with sentry.new_scope() as scope:
+                    scope.set_tag("request_id", request.state.request_id)
+                    scope.set_context("request", {"method": request.method, "path": path})
+                    sentry.capture_exception()
             response = JSONResponse({"detail": "Internal server error.", "request_id": request.state.request_id}, 500)
     h = response.headers
     h.update(sec.COMMON_HEADERS)
@@ -379,6 +416,8 @@ class DatasetExampleIn(Strict):
 
 class DatasetExamplesIn(Strict):
     examples: list[DatasetExampleIn] = Field(min_length=1, max_length=1000)
+    allow_duplicates: bool = Field(False, description="Add examples even if an identical (input, expected_output) "
+                                                      "is already in the dataset.")
 
 
 class ExamplePatch(Strict):
@@ -777,9 +816,8 @@ def dataset_history(project_id: str, dataset_id: str, t=Depends(tenant)):
 @app.post("/v1/projects/{project_id}/datasets/{dataset_id}/examples", status_code=201)
 def add_dataset_examples(project_id: str, dataset_id: str, body: DatasetExamplesIn, t=Depends(tenant)):
     lim = limits(t)
-    if lim and dev.count_examples(t["id"], project_id, dataset_id) + len(body.examples) > lim["examples_per_dataset"]:
-        raise QuotaExceeded(f"The {t['plan']} plan allows {lim['examples_per_dataset']} examples per dataset.")
-    return {"ids": dev.add_examples(t["id"], project_id, dataset_id, [e.model_dump() for e in body.examples])}
+    return dev.add_examples(t["id"], project_id, dataset_id, [e.model_dump() for e in body.examples],
+                            body.allow_duplicates, lim and lim["examples_per_dataset"])  # {"ids": [...], "skipped": n}
 
 
 @app.put("/v1/projects/{project_id}/datasets/{dataset_id}/examples/{example_id}")

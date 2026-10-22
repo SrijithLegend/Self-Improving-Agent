@@ -50,7 +50,9 @@ rules are tested, but these must be addressed before hosting paying customers:
 - Request-size limiting relies on `Content-Length`; chunked uploads without it are not capped before parsing.
 - Run export loads up to 100,000 rows into memory.
 - ~~No backups or on-call runbook.~~ Done (Task 6, 4c596ad): `sia backup` / `sia restore`, a Litestream example and
-  `docs/RUNBOOK.md`. Still no metrics or alerting. Logs go to stdout as JSON lines.
+  `docs/RUNBOOK.md`. ~~No alerting.~~ Done (improvement 6): `sia logcheck` alerts on the 5xx rate in the JSON
+  logs (which, it turned out, never printed before: fixed), and optional Sentry reports unhandled errors with
+  headers and bodies stripped. Still no metrics dashboard. A restore drill on the real server is still to do.
 - ~~No retention job.~~ Done (Task 9, 7edabce): `sia maintenance` applies run retention to idle projects too, and deletes
   old rejected access requests and unpaid orders. Schedule it daily (`docs/RUNBOOK.md`).
 - `sia/agent.py` managed-agent `study` and `improve` still run synchronously inside the request.

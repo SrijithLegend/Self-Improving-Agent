@@ -62,6 +62,9 @@ What makes it different from a tracing tool:
 pip install "sia-devtools[server] @ git+https://github.com/SrijithLegend/Self-Improving-Agent"
 ```
 
+The package is ready for PyPI (`pip install "sia-devtools[server]"` once the first release is published; see
+[`docs/RELEASING.md`](docs/RELEASING.md)). The SDK alone needs only `httpx`; `[server]` adds the API and dashboard.
+
 Or from a clone: `pip install -e ".[dev]"`, then `python -m pytest` should pass (the badge above shows CI).
 
 **1. Instrument the function you already have.** No framework, no rewrite:
@@ -75,6 +78,10 @@ sia = SIAClient(project="my-ai-agent")      # local mode: writes to sia_local.db
 def answer(question: str) -> str:
     return my_existing_agent(question)
 ```
+
+Async apps work the same way: put `@sia.trace` on an `async def`. Recording never waits on the network. In hosted
+mode runs are queued and sent in batches by a background thread, so your event loop isn't blocked; concurrent tasks
+each keep their own run tree. In local mode each finished run is one small SQLite write.
 
 Need more control? Use a run directly:
 
@@ -94,6 +101,9 @@ ds = sia.create_dataset("refund-policy-tests")
 ds.add_example(input={"question": "Can I get a refund after 40 days?"},
                expected_output="DECISION: NO", critical=True)   # critical = may never regress
 ```
+
+Re-running the script is safe: an example whose input and expected output are already in the dataset is skipped
+(its id is returned and the dataset version stays the same). Pass `allow_duplicate=True` to add it again on purpose.
 
 **3. Evaluate.** Your function is called once per example and scored:
 
@@ -252,6 +262,7 @@ sia backup        [--dir backups] [--keep 14] [--db]     safe online copy + inte
 sia restore       FILE [--db]                             server stopped; saves the current DB first
 sia maintenance   [--db]                                  daily retention job; one JSON line of counts
 sia doctor        [--db] [--backup-dir backups]           launch readiness: PASS / WARN / FAIL, exit 1 on a FAIL
+sia logcheck      [FILE|-] [--minutes 10] [--max-error-rate 0.05]   alert on 5xx rate in the JSON logs, exit 1
 ```
 
 Common options: `--project` (`SIA_PROJECT`), `--api-key` (`SIA_API_KEY`), `--base-url` (`SIA_BASE_URL`),
@@ -450,12 +461,15 @@ history) showed the loop working on a free model; learned lessons helped in one 
 | `SIA_TRUSTED_PROXIES` | `127.0.0.1` | proxies whose `X-Forwarded-For`/`-Proto` are believed (`sia serve`) |
 | `SIA_ALLOWED_HOSTS` | unset | comma-separated hostnames; other `Host` headers get `400` |
 | `SIA_CONTACT_EMAIL` | unset | public contact address: the site's Contact links become `mailto:` (served at `/site-config.json`); unset = GitHub issues |
+| `SENTRY_DSN`, `SENTRY_ENVIRONMENT` | unset, `production` | optional error reporting (`pip install "sia-devtools[sentry]"`): unhandled errors only, headers and bodies stripped |
 | `SIA_LOCAL_MODE` | unset | `1` = no keys, loopback only (set by `sia dashboard`) |
 | `SIA_ALLOW_CUSTOM_BASE_URL` | unset | managed agents: allow custom LLM URLs and Ollama |
 | `HOST`, `PORT` | `127.0.0.1`, `8000` | `sia serve` |
 
 Project settings (`sia.update_settings(...)`, `PATCH /projects/{p}`, or the dashboard):
-`redact` (rules, default `["secrets", "cards"]`), `retention_days`, `policy` (see verdicts), `locked_text`
+`redact` (rules, default `["secrets", "cards"]`; also `email`, `phone`, and for Indian data `aadhaar` (checksum-verified) and
+`pan`; or your own regexes. `secrets` covers API keys, bearer tokens, private keys, and GitHub, Slack, AWS and Razorpay
+live keys), `retention_days`, `policy` (see verdicts), `locked_text`
 (lines every version must keep verbatim, for example safety rules: candidates that drop them are refused).
 
 **Plans** (hypotheses, not validated prices; enforced server-side):
@@ -580,22 +594,32 @@ sia_devtools/          # the SDK and CLI (pip package "sia-devtools", command "s
 ├── client.py          # SIAClient, Run, Dataset, Prompt: tracing, feedback, datasets, evaluate, versions
 ├── store.py           # SQLite storage shared by local mode and the server; redaction; migrations
 ├── scoring.py         # scorers, paired comparison, CI gate (pure functions)
-├── cli.py             # sia eval run|compare|gate, improve, versions, runs, feedback, serve, dashboard
+├── cli.py             # sia eval run|compare|gate, improve, versions, runs, feedback, serve, dashboard, admin, ops
 └── errors.py          # one exception family, same in local and hosted mode
 sia/                   # the server
 ├── api.py             # FastAPI: auth, scopes, plans, DevTools routes, managed agents routes
 ├── dashboard.html     # the dashboard at /dashboard (single static page, no build step)
 ├── store.py           # organizations, keys, plans, payments, usage, managed agents
 ├── billing.py         # Razorpay orders, signature and webhook checks
+├── ops.py             # sia backup, restore, maintenance, doctor
 ├── agent.py           # the original self-improvement engine
 └── llm.py             # one HTTP client for 9 LLM providers
 web/                        # landing page served at / (static, no build step; see web/README.md)
 examples/devtools_demo.py   # the end-to-end demo above
 examples/ci/sia-gate.yml    # GitHub Actions gate example
 examples/demo.py            # the original managed-agent demo
-tests/                      # 65 offline tests (no API keys)
+examples/deploy/            # nginx and Litestream examples
+tests/                      # offline tests (no API keys)
 LICENSE.md                  # FSL-1.1-ALv2
-docs/AUDIT.md               # audit, what was built, readiness assessment
+SECURITY.md                 # threat model, production checklist
+docs/
+├── AUDIT.md                # audit, what was built, production readiness
+├── RUNBOOK.md              # backups, restore, key rotation, outages, daily jobs
+├── RAZORPAY_TEST_PLAN.md   # payments checklist to run in test mode before going live
+├── LAUNCH_SPEC.md          # the launch plan, with LAUNCH_NOTES.md (choices made) and LAUNCH_REVIEW.md
+├── IMPROVEMENTS.md         # post-launch improvement list
+├── DESIGN_RULES.md         # rules the landing page and dashboard follow (FRONTEND_SPEC.md: the original brief)
+└── SPEC.md                 # historical: the original product brief
 ```
 
 ## License

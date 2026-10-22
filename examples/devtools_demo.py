@@ -4,6 +4,8 @@ follows the numbers, whatever they turn out to be.
     python examples/devtools_demo.py            # real Gemini model (GENAI_API_KEY in .env, free tier is fine)
     python examples/devtools_demo.py --offline  # scripted stand-in model, no key needed (shows the mechanics only)
     python examples/devtools_demo.py --hard     # harder, content-reasoning dataset, real model only (see hard())
+    python examples/devtools_demo.py --harder   # multi-step refund arithmetic, aiming at a weaker baseline
+    python examples/devtools_demo.py --regression  # a teammate's prompt edit breaks cases; the gate must block it
 
 Fictional company, fictional data. The app is a returns assistant whose replies are parsed by downstream code, so
 every reply must start with "DECISION: YES" or "DECISION: NO".
@@ -229,35 +231,184 @@ def refund(output, expected, example):
     return bool(got and want and int(got.group(1).replace(",", "")) == int(want.group(1).replace(",", "")))
 
 
-def hard(db=None):
-    """Baseline vs a candidate drafted from the dev set's failures only, decided on the held-out test set."""
+def real_model():
     from sia.llm import LLM
-    model = LLM("gemini", os.environ["GENAI_API_KEY"], os.getenv("DEMO_MODEL"))
-    db = db or str(Path(tempfile.mkdtemp()) / "sia_hard.db")
-    sia = SIAClient(project="trailhead-hard", local=db)
-    target = lambda inp, p: model.text(f"{p}\n\nPOLICY:\n{HARD_POLICY}", inp["question"], temperature=0)  # noqa: E731
+    return LLM("gemini", os.environ["GENAI_API_KEY"], os.getenv("DEMO_MODEL"))
+
+
+def hard(db=None, policy=HARD_POLICY, prompt=HARD_PROMPT, cases=HARD_CASES, name="hard"):
+    """Baseline vs a candidate drafted from the dev set's failures only, decided on the held-out test set."""
+    model = real_model()
+    db = db or str(Path(tempfile.mkdtemp()) / f"sia_{name}.db")
+    sia = SIAClient(project=f"trailhead-{name}", local=db)
+    target = lambda inp, p: model.text(f"{p}\n\nPOLICY:\n{policy}", inp["question"], temperature=0)  # noqa: E731
     sets = {}
-    for name, cases in (("hard-dev", HARD_CASES[0::2]), ("hard-test", HARD_CASES[1::2])):
-        sets[name] = sia.dataset(name)
-        sets[name].add_examples([{"input": {"question": q}, "expected_output": f"DECISION: {d}\nREFUND: {r}"}
-                                 for q, d, r in cases])
-    v1 = sia.create_version(HARD_PROMPT, note="baseline")
+    for set_name, part in ((f"{name}-dev", cases[0::2]), (f"{name}-test", cases[1::2])):
+        sets[set_name] = sia.dataset(set_name)
+        sets[set_name].add_examples([{"input": {"question": q}, "expected_output": f"DECISION: {d}\nREFUND: {r}"}
+                                     for q, d, r in part])
+    v1 = sia.create_version(prompt, note="baseline")
     sia.approve(v1["version"])
     sia.activate(v1["version"])
     scorers, res, out = [decision, refund], {}, {}
     for name, ds in sets.items():
         res[name, "base"] = sia.evaluate(ds, target, scorers, version="active")
-    cand = sia.propose_improvement(model, evaluation=res["hard-dev", "base"])  # dev failures only
+    cand = sia.propose_improvement(model, evaluation=res[f"{name}-dev", "base"])  # dev failures only
     for name, ds in sets.items():
         res[name, "cand"] = sia.evaluate(ds, target, scorers, version=cand["version"])
-    for name in sets:
-        cmp = sia.compare(res[name, "base"], res[name, "cand"])
-        out[name] = {"baseline": res[name, "base"]["summary"]["score"],
-                     "candidate": res[name, "cand"]["summary"]["score"], "verdict": cmp["verdict"],
-                     "mean_gain": cmp["mean_gain"], "regressions": len(cmp["regressions"] or [])}
-        print(f"{name:<10} baseline {out[name]['baseline']:.3f}  candidate {out[name]['candidate']:.3f}  "
+    for set_name in sets:
+        cmp = sia.compare(res[set_name, "base"], res[set_name, "cand"])
+        out[set_name] = {"baseline": res[set_name, "base"]["summary"]["score"],
+                         "candidate": res[set_name, "cand"]["summary"]["score"], "verdict": cmp["verdict"],
+                         "mean_gain": cmp["mean_gain"], "regressions": len(cmp["regressions"] or [])}
+        print(f"{set_name:<12} baseline {out[set_name]['baseline']:.3f}  candidate {out[set_name]['candidate']:.3f}  "
               f"verdict {cmp['verdict']} ({cmp['reason']})")
     print(f"candidate system_prompt@{cand['version']}:\n{cand['content']}\nmodel calls: {model.calls}  database: {db}")
+    print("RESULT " + json.dumps(out))
+    return out
+
+
+# --- --harder: the same idea with multi-step refund arithmetic -----------------------------------------------------
+HARDER_POLICY = """Trailhead Outfitters returns policy (fictional). Amounts are in rupees.
+1. Unworn, unused items can be returned within 30 days of delivery (day 30 included). Trail Club members get 60 days.
+2. Worn or used items cannot be returned, except footwear with a manufacturing defect, which can be returned within
+   1 year of delivery even if worn.
+3. Clearance items are final sale and cannot be returned, even by members, unless rule 2 applies.
+4. Items bought in a discounted bundle must be returned together; the bundle is then treated as one item.
+5. Gifts can be returned only with the gift receipt.
+The refund for an accepted return is worked out in this order:
+a. Start from the item's share of what was paid. If the order used a coupon, the coupon discount is shared across
+   the order's items in proportion to their list prices.
+b. Returns made after day 14 lose a 10% restocking fee (10% of the amount from step a), except for members and
+   defective items.
+c. Add the original shipping charge only if the item is defective, or if the whole order is returned within 7 days
+   of delivery.
+d. For cash-on-delivery orders, subtract a 50 rupee handling fee.
+e. Gift returns are paid as store credit, which gets a 5% bonus on the amount from steps a to d.
+Round down to whole rupees at the end."""
+
+HARDER_PROMPT = HARD_PROMPT
+
+
+def harder_refund(price, days, *, member=False, used=False, defective_footwear=False, clearance=False,
+                  coupon=0, order_list_total=None, shipping=0, whole_order=False, cod=False, gift=None,
+                  partial_bundle=False):
+    """Reference implementation of HARDER_POLICY: the expected answers below come from it, not from arithmetic
+    done by hand. gift: None (not a gift), True (with receipt) or False (no receipt)."""
+    if gift is False or partial_bundle:
+        return "NO", 0
+    defect = defective_footwear and days <= 365
+    if not defect and (clearance or used or days > (60 if member else 30)):
+        return "NO", 0
+    amount = price - coupon * price / (order_list_total or price)
+    if days > 14 and not member and not defect:
+        amount -= 0.10 * amount
+    if defect or (whole_order and days <= 7):
+        amount += shipping
+    if cod:
+        amount -= 50
+    if gift:
+        amount *= 1.05
+    return "YES", int(amount + 1e-9)
+
+
+# (question, facts). Pairs of the same kind of case: first of each pair is dev, second is held-out test. Written
+# and committed before any run; not tuned after seeing results.
+_HARDER = [
+    ("Not a member. I ordered a jacket (list price 6,000) and gloves (list price 2,000) with an 800 off coupon on the "
+     "order, prepaid, no shipping charge. The jacket arrived 10 days ago and is unused. I want to return just the "
+     "jacket. How much do I get back?", dict(price=6000, days=10, coupon=800, order_list_total=8000)),
+    ("Not a member. I ordered a tent (list price 9,000) and tent stakes (list price 1,000) with a 1,000 off coupon, "
+     "prepaid. Delivered 5 days ago. I'm returning only the unused stakes. How much is refunded?",
+     dict(price=1000, days=5, coupon=1000, order_list_total=10000)),
+    ("Not a member. Jacket (list 6,000) and gloves (list 2,000) ordered together with an 800 off coupon, prepaid. "
+     "Delivered 20 days ago. I want to return only the gloves, unused. What's my refund?",
+     dict(price=2000, days=20, coupon=800, order_list_total=8000)),
+    ("Not a member. Camp stove (list 4,000) and mug (list 1,000), 500 off coupon on the order, prepaid. Delivered 25 "
+     "days ago. Returning just the unused stove. Refund amount?",
+     dict(price=4000, days=25, coupon=500, order_list_total=5000)),
+    ("Not a member. I ordered only a headlamp for 1,500 and paid 150 shipping, prepaid. It arrived 5 days ago and I "
+     "want to return it unused. What do I get back?", dict(price=1500, days=5, shipping=150, whole_order=True)),
+    ("Not a member. One order: socks (500) and a cap (700), plus 100 shipping, prepaid. Delivered 6 days ago. I'm "
+     "returning both, unused. Total refund?", dict(price=1200, days=6, shipping=100, whole_order=True)),
+    ("Not a member. One order: socks (500) and a cap (700), plus 100 shipping, prepaid. Delivered 3 days ago. I'm "
+     "returning only the cap, unused. Refund?", dict(price=700, days=3, shipping=100)),
+    ("Not a member. I ordered only a headlamp for 1,500 plus 150 shipping, prepaid. Delivered 9 days ago, unused. "
+     "How much do I get back if I return it?", dict(price=1500, days=9, shipping=150, whole_order=True)),
+    ("Not a member. A fleece for 2,000, paid cash on delivery, no shipping charge. Delivered 10 days ago, unused. "
+     "Refund if I return it?", dict(price=2000, days=10, cod=True)),
+    ("Not a member. A fleece for 2,000, cash on delivery, no shipping charge. Delivered 20 days ago, unused. What "
+     "would the refund be?", dict(price=2000, days=20, cod=True)),
+    ("A sleeping bag I received as a gift, 6,000, prepaid, delivered 10 days ago, unused. I have the gift receipt. "
+     "Neither of us is a member. What do I get?", dict(price=6000, days=10, gift=True)),
+    ("A sleeping bag gift, 6,000, prepaid, delivered 20 days ago, unused, with the gift receipt. Neither of us is a "
+     "member. How much store credit?", dict(price=6000, days=20, gift=True)),
+    ("Trail Club member. A jacket for 5,000, cash on delivery, delivered 40 days ago, unused. Refund?",
+     dict(price=5000, days=40, member=True, cod=True)),
+    ("Trail Club member. Tent (list 8,000) and lantern (list 2,000) ordered with a 1,500 off coupon, prepaid. "
+     "Delivered 45 days ago. Returning just the unused lantern. Refund?",
+     dict(price=2000, days=45, member=True, coupon=1500, order_list_total=10000)),
+    ("Not a member. Boots (list 9,000) and socks (list 1,000) with a 1,000 off coupon, 200 shipping, prepaid. I've "
+     "worn the boots for 6 months and the sole split from a manufacturing defect. Returning the boots. Refund?",
+     dict(price=9000, days=180, used=True, defective_footwear=True, coupon=1000, order_list_total=10000,
+          shipping=200)),
+    ("Clearance trail shoes, 4,000, cash on delivery, 100 shipping. Worn for 2 months and the stitching failed from a "
+     "manufacturing defect. Not a member. What's the refund?",
+     dict(price=4000, days=60, used=True, defective_footwear=True, clearance=True, cod=True, shipping=100)),
+    ("Trail Club member. An unused clearance tent delivered 3 days ago. Can I return it, and for how much?",
+     dict(price=7000, days=3, member=True, clearance=True)),
+    ("Not a member. Unused trekking poles for 2,000, prepaid, delivered 31 days ago. Refund?",
+     dict(price=2000, days=31)),
+    ("Not a member. I bought a stove and a pot as a discounted bundle for 4,500, prepaid, delivered 5 days ago. Can I "
+     "return just the pot, and for how much?", dict(price=4500, days=5, partial_bundle=True)),
+    ("An unused water filter I got as a gift last week, 1,800. There's no gift receipt. Refund?",
+     dict(price=1800, days=7, gift=False)),
+]
+HARDER_CASES = [(q, *harder_refund(**facts)) for q, facts in _HARDER]
+
+
+def harder():
+    return hard(policy=HARDER_POLICY, prompt=HARDER_PROMPT, cases=HARDER_CASES, name="harder")
+
+
+# --- --regression: the gate's real job is to stop a change that breaks things --------------------------------------
+# A plausible teammate edit, written before any run: make the bot friendlier and more generous.
+REGRESSION_EDIT = (HARD_PROMPT + " Customers are our top priority: be warm, give them the benefit of the doubt, and "
+                                  "approve returns whenever you reasonably can.")
+
+
+def regression(db=None):
+    """The active prompt is HARD_PROMPT. The edit is gated on all 20 HARD_CASES; every case whose answer is NO is
+    critical (the bot must never approve what the policy forbids). The gate allows no regressions."""
+    from sia_devtools.scoring import EXIT, gate
+    model = real_model()
+    db = db or str(Path(tempfile.mkdtemp()) / "sia_regression.db")
+    sia = SIAClient(project="trailhead-regression", local=db)
+    target = lambda inp, p: model.text(f"{p}\n\nPOLICY:\n{HARD_POLICY}", inp["question"], temperature=0)  # noqa: E731
+    ds = sia.dataset("returns-all")
+    ds.add_examples([{"input": {"question": q}, "expected_output": f"DECISION: {d}\nREFUND: {r}", "critical": d == "NO"}
+                     for q, d, r in HARD_CASES])
+    v1 = sia.create_version(HARD_PROMPT, note="baseline")
+    sia.approve(v1["version"])
+    sia.activate(v1["version"])
+    edit = sia.create_version(REGRESSION_EDIT, note="friendlier tone (teammate edit)")
+    base = sia.evaluate(ds, target, [decision, refund], version="active")
+    cand = sia.evaluate(ds, target, [decision, refund], version=edit["version"])
+    cmp = sia.compare(base, cand)
+    status, reasons = gate(cand["summary"]["score"], cmp, None, 0, False)
+    print(f"baseline {base['summary']['score']:.3f}  edit {cand['summary']['score']:.3f}  verdict {cmp['verdict']} "
+          f"({cmp['reason']})")
+    print(f"regressions {cmp['regressions']}  critical {cmp['critical_regressions']}")
+    print(f"gate: {status.upper()} (exit code {EXIT[status]}): " + "; ".join(reasons))
+    if status == "pass":
+        print("the gate let the edit through")
+    else:
+        sia.reject(edit["version"], reason=f"gate {status}: {cmp['reason']}", reviewer="ci")
+        print(f"blocked: system_prompt@{edit['version']} rejected, production stays on @{v1['version']}")
+    out = {"baseline": base["summary"]["score"], "edit": cand["summary"]["score"], "verdict": cmp["verdict"],
+           "regressions": len(cmp["regressions"] or []), "critical": len(cmp["critical_regressions"] or []),
+           "gate": status, "exit_code": EXIT[status]}
+    print(f"model calls: {model.calls}  database: {db}")
     print("RESULT " + json.dumps(out))
     return out
 
@@ -268,9 +419,11 @@ if __name__ == "__main__":
         load_dotenv()
     except ImportError:
         pass
-    if "--hard" in sys.argv:
+    real = {"--hard": hard, "--harder": harder, "--regression": regression}
+    flag = next((f for f in real if f in sys.argv), None)
+    if flag:
         if not os.getenv("GENAI_API_KEY"):
-            sys.exit("--hard needs a real model: set GENAI_API_KEY in .env")
-        hard()
+            sys.exit(f"{flag} needs a real model: set GENAI_API_KEY in .env")
+        real[flag]()
     else:
         main(offline="--offline" in sys.argv)

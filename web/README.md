@@ -54,7 +54,7 @@ Fonts.
 - **Dashboard moved to `/dashboard`.** `/` is now the landing page. `sia dashboard` prints the new URL.
 - **Static path** is resolved from the package (`<repo>/web`), not the working directory, and the mount is skipped
   when the folder is missing (a `pip install` of the SDK ships no landing page).
-- **One product.** The page sells SIA DevTools, as the README does (LAUNCH_SPEC Task 1). The managed agents API
+- **One product.** The page sells SIA DevTools, as the README does (docs/LAUNCH_SPEC.md, Task 1). The managed agents API
   still exists and is documented in the README, but it isn't marketed here.
 - **Results** is the README "Demo results" table for `examples/devtools_demo.py`, shortened to five rows, with its
   "What this does and does not show" caveat.
@@ -81,9 +81,9 @@ Fonts.
 - **Font fallbacks**: Georgia, Arial and Courier New `@font-face` aliases with `size-adjust` and ascent/descent
   overrides, to limit layout shift while the web fonts load.
 
-## DESIGN_RULES.md
+## docs/DESIGN_RULES.md
 
-The page and the dashboard follow `DESIGN_RULES.md`. Where a rule is bent, this is the one-sentence reason
+The page and the dashboard follow [`docs/DESIGN_RULES.md`](../docs/DESIGN_RULES.md). Where a rule is bent, this is the one-sentence reason
 (Appendix B):
 
 - **Corner brackets** appear in two places only: the secondary button and the hero frame. They're drawn with

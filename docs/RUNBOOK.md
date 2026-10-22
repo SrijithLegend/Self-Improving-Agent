@@ -20,7 +20,8 @@ environment.
    With Docker: `docker exec sia sia backup --dir /data/backups --keep 14`.
 3. Copy the backup directory off the machine (another disk, S3, your laptop). A backup on the same disk as the
    database doesn't survive losing that disk. For continuous replication, see `examples/deploy/litestream.yml`.
-4. Once a month, do a restore drill on another machine (below) and check the row counts look right.
+4. Once a month, do a restore drill on another machine (below) and check the row counts look right. Do the first
+   one before launch, on the real server's backups.
 
 ## Before launch, and after any config change
 
@@ -47,6 +48,23 @@ It is safe to run any number of times and prints one JSON line with the counts. 
 ```
 
 With Docker: `docker exec sia sia maintenance`.
+
+## Monitoring and alerts
+
+The server writes one JSON line per request to stdout (`method`, `path`, `status`, `ms`, `request_id`; no headers,
+query strings or bodies), plus `sia.security` lines with an `event` field.
+
+1. **Uptime:** point an uptime monitor at `GET` or `HEAD https://YOUR-HOST/health`.
+2. **Error rate:** every 5 minutes, check the last 10 minutes of logs. `sia logcheck` exits 1 when more than 5% of
+   requests were 5xx (once there are at least 20), or above `--max-security-events`:
+   ```cron
+   */5 * * * * docker logs --since 10m sia 2>&1 | sia logcheck --minutes 10 --max-security-events 50 >> /var/log/sia-logcheck.log 2>&1 || echo "SIA alert, see /var/log/sia-logcheck.log" | mail -s "SIA alert" you@example.com
+   ```
+   (`sia logcheck` can run on the host with `pip install sia-devtools`; it only reads the log.)
+3. **Exceptions (optional):** create a free Sentry project, `pip install "sia-devtools[sentry]"` in the server image
+   (or add `sentry-sdk` to it), and set `SENTRY_DSN`. Only unhandled server errors are sent, tagged with their
+   `request_id`; request headers, bodies, query strings and cookies are stripped first, so API, admin and model keys
+   never leave the server.
 
 ## Restore
 

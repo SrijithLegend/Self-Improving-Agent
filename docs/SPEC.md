@@ -1,3 +1,7 @@
+> **Historical.** This is the original brief that turned the managed-agent prototype into SIA DevTools. It
+> describes plans and file layouts from before launch (for example `phase1/`, since removed). For what the
+> product is now, read the [README](../README.md); for launch decisions, [LAUNCH_NOTES.md](LAUNCH_NOTES.md).
+
 # PROJECT: Turn Self-Improving Agent into a Commercial AI Developer Platform
 
 Repository: https://github.com/SrijithLegend/Self-Improving-Agent

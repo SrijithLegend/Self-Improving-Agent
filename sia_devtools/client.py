@@ -15,6 +15,7 @@ import inspect
 import json
 import logging
 import os
+import sys
 import threading
 import time
 import uuid
@@ -180,16 +181,23 @@ class Dataset:
         return self._c._p(f"/datasets/{self.id}{rest}")
 
     def add_example(self, input: Any, expected_output: Any = None, *, metadata: dict | None = None,
-                    critical: bool = False) -> int:
+                    critical: bool = False, allow_duplicate: bool = False) -> int:
+        """Returns the example's id. An identical (input, expected_output) already in the dataset is not added
+        again (its existing id is returned) unless allow_duplicate=True."""
         return self.add_examples([{"input": input, "expected_output": expected_output, "metadata": metadata,
-                                   "critical": critical}])[0]
+                                   "critical": critical}], allow_duplicates=allow_duplicate)[0]
 
-    def add_examples(self, examples: Iterable[dict]) -> list[int]:
+    def add_examples(self, examples: Iterable[dict], *, allow_duplicates: bool = False) -> list[int]:
+        """Add examples as one new dataset version; identical (input, expected_output) pairs already in the dataset
+        or repeated in this batch are skipped (their existing ids are returned), so re-running a script is safe."""
         c = self._c
         items = [{"input": c._prep(e.get("input")), "expected_output": c._prep(e.get("expected_output")),
                   "metadata": e.get("metadata") or {}, "critical": bool(e.get("critical"))} for e in examples]
-        out = c._do(lambda: {"ids": c._store.add_examples(LOCAL_ORG, c.project_id, self.id, items)},
-                    "POST", self._path("/examples"), {"examples": items})
+        out = c._do(lambda: c._store.add_examples(LOCAL_ORG, c.project_id, self.id, items, allow_duplicates),
+                    "POST", self._path("/examples"), {"examples": items, "allow_duplicates": allow_duplicates})
+        if out.get("skipped"):
+            print(f"SIA: dataset {self.name}: skipped {out['skipped']} duplicate example(s) already in it "
+                  "(pass allow_duplicate(s)=True to add them anyway)", file=sys.stderr)
         self.refresh()
         return out["ids"]
 
@@ -312,14 +320,13 @@ class SIAClient:
     def trace(self, name: "str | Callable | None" = None, *, tags: list[str] | None = None,
               capture_input: bool = True, capture_output: bool = True):
         """Decorator: record each call of a function as a run (arguments in, return value out, exceptions as
-        errors, which are re-raised unchanged). Works bare (@sia.trace) or with options (@sia.trace("name"))."""
+        errors, which are re-raised unchanged). Works bare (@sia.trace) or with options (@sia.trace("name")), on
+        regular and async functions. Recording never waits on the network: hosted mode sends from a background
+        thread, so an async app's event loop isn't blocked (local mode writes one SQLite row when the run ends)."""
         def deco(fn):
-            if inspect.iscoroutinefunction(fn):
-                raise TypeError("sia.trace supports regular functions; async support is not implemented yet.")
             sig = inspect.signature(fn)
 
-            @functools.wraps(fn)
-            def wrapper(*args, **kwargs):
+            def run_for(args, kwargs):
                 inp = None
                 if capture_input:
                     try:
@@ -328,7 +335,21 @@ class SIAClient:
                         inp = {k: v for k, v in bound.arguments.items() if k not in ("self", "cls")}
                     except TypeError:
                         inp = {"args": args, "kwargs": kwargs}
-                with self.start_run(label or fn.__qualname__, inp, tags=tags) as run:
+                return self.start_run(label or fn.__qualname__, inp, tags=tags)
+
+            if inspect.iscoroutinefunction(fn):
+                @functools.wraps(fn)
+                async def awrapper(*args, **kwargs):
+                    with run_for(args, kwargs) as run:  # the current run is a contextvar: each asyncio task has its own
+                        out = await fn(*args, **kwargs)
+                        if capture_output:
+                            run.log_output(out)
+                        return out
+                return awrapper
+
+            @functools.wraps(fn)
+            def wrapper(*args, **kwargs):
+                with run_for(args, kwargs) as run:
                     out = fn(*args, **kwargs)
                     if capture_output:
                         run.log_output(out)

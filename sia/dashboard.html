@@ -636,7 +636,7 @@ V.project = async () => {
   return `<h1>Project & keys</h1><p class="sub mono">${esc(p.name)} · ${esc(p.id)}</p>
   <div class="card"><h2 style="margin-top:0">Install</h2><pre>pip install "sia-devtools @ git+https://github.com/SrijithLegend/Self-Improving-Agent"</pre>${snippet()}</div>
   <form class="card" data-form="settings"><h2 style="margin-top:0">Settings</h2>
-    <label>Redaction rules (applied before anything is stored): built-ins secrets, cards, email, phone, or a regex. One per line.</label>
+    <label>Redaction rules (applied before anything is stored): built-ins secrets, cards, email, phone, aadhaar, pan, or a regex. One per line. Apps that handle Indian customers should add aadhaar and pan.</label>
     <textarea name="redact">${esc(s.redact.join("\n"))}</textarea>
     <label>Retention (days, empty = plan default)</label><input name="retention_days" type="number" min="1" value="${esc(s.retention_days ?? "")}">
     <label>Evaluation policy (acceptance criteria for releases)</label><textarea name="policy">${j(s.policy)}</textarea>

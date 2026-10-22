@@ -218,7 +218,8 @@ def cmd_serve(a, local_db=None):
         print(f"SIA dashboard (local mode, {local_db}): http://127.0.0.1:{a.port}/dashboard")
     # X-Forwarded-For/-Proto are believed only from these proxies (rate limits and HSTS rely on the real client
     # address and scheme); the default trusts a proxy on this machine only
-    uvicorn.run("sia.api:app", host=a.host, port=a.port, proxy_headers=True, server_header=False,
+    # access_log=False: sia.api logs one JSON line per request instead, without query strings
+    uvicorn.run("sia.api:app", host=a.host, port=a.port, proxy_headers=True, server_header=False, access_log=False,
                 forwarded_allow_ips=os.getenv("SIA_TRUSTED_PROXIES", "127.0.0.1"))
     return 0
 
@@ -400,6 +401,14 @@ def parser():
     dr = sub.add_parser("doctor", parents=[db], help="launch readiness: PASS / WARN / FAIL per check, exit 1 on any FAIL")
     dr.add_argument("--backup-dir", default="backups")
     dr.set_defaults(fn=ops("doctor_cmd"))
+    lc = sub.add_parser("logcheck", help="alert on the server's 5xx rate (and security events) in its JSON logs, "
+                                         "exit 1 to alert")
+    lc.add_argument("file", nargs="?", default="-", help="log file, or - for stdin (default)")
+    lc.add_argument("--minutes", type=float, default=10)
+    lc.add_argument("--max-error-rate", type=float, default=0.05, help="fraction of 5xx responses (default 0.05)")
+    lc.add_argument("--min-requests", type=int, default=20, help="don't alert on fewer requests than this")
+    lc.add_argument("--max-security-events", type=int, help="also alert above this many security events")
+    lc.set_defaults(fn=ops("logcheck_cmd"))
     return p
 
 
