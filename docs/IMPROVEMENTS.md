@@ -34,10 +34,10 @@ The code is ready. These human steps from LAUNCH_SPEC.md §3 aren’t done yet: 
 | 1 | Duplicate dataset examples | **Done.** Identical `(input, expected_output)` pairs, after redaction, are skipped (existing id returned, version unchanged); `allow_duplicate(s)=True` to add anyway; the SDK prints how many were skipped. The hosted plan limit now counts only new examples, so a re-run at the limit isn't refused. | 63f7568 |
 | 2 | Redaction for India + more secrets | **Done.** Opt-in `aadhaar` (Verhoeff-checked) and `pan`; the default `secrets` rule now covers GitHub, Slack, AWS key ids and Razorpay live keys. | d0ceb99 |
 | 3 | Repo root cleanup | **Done.** `SPEC.md` (marked historical), `FRONTEND_SPEC.md`, `LAUNCH_SPEC.md`, `DESIGN_RULES.md` moved to `docs/`. | 49aaec7 |
-| 4 | Proof it catches something | **Scripts done; not run yet.** `--regression` (a "be generous" edit gated with critical cases) and `--harder` (multi-step refund arithmetic), both committed before any run. Results go in the README once run against a real model. | 410bf2c |
+| 4 | Proof it catches something | **Done; results in the README.** `--regression` (a "be generous" edit gated with critical cases) and `--harder` (multi-step refund arithmetic), both committed before any run. | 410bf2c, 3290063 |
 | 5 | PyPI + async | **Ready; publishing is yours.** Name unregistered on 2026-10-22; metadata, clean build, `twine check`, a trusted-publishing workflow and `docs/RELEASING.md`. `@sia.trace` now works on `async def` (it used to raise `TypeError`). | e1adab8 |
 | 6 | Operations | **Done in code; restore drill is yours.** Access logs were never printed (no handler): fixed. `sia logcheck` alerts on the 5xx rate; optional Sentry with headers and bodies stripped. Postgres deferred, as the list says. | d9e1d31 |
 | 7 | Wait for beta users | **Not built, on purpose.** Accounts/SSO, framework adapters and subscriptions wait for real users. | — |
 
-Owner-only steps still open: run the item 4 demos against a real model, publish to PyPI (one-time trusted-publisher setup in `docs/RELEASING.md`), a restore
+Owner-only steps still open: publish to PyPI (one-time trusted-publisher setup in `docs/RELEASING.md`), a restore
 drill on the real server, and the launch checklist in `docs/LAUNCH_SPEC.md` §3.
