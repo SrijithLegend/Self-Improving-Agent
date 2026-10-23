@@ -10,3 +10,7 @@ build/
 *.egg-info/
 sia-gate.json
 backups/
+brag-output/
+.agents/
+.claude/
+skills-lock.json
