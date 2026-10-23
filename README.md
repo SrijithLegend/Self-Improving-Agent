@@ -42,7 +42,8 @@ def answer(question: str) -> str:
 Then gate every prompt change in CI:
 
 ```bash
-sia eval gate --dataset regression --target app:answer --scorer exact_match \n  --candidate-file prompts/system_prompt.txt --max-regressions 0
+sia eval gate --dataset regression --target app:answer --scorer exact_match \
+  --candidate-file prompts/system_prompt.txt --max-regressions 0
 ```
 
 Exit `0` ships it. Exit `1` blocks it. Exit `3` means the evidence is too thin to tell.
