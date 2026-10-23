@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="docs/assets/sia-launch.mp4">
-    <img src="docs/assets/hero.jpg" width="600" alt="A teammate's one friendly prompt line drops the score from 0.950 to 0.875 and SIA's gate fails it with exit code 1">
+    <img src="docs/assets/hero.jpg" width="520" alt="A teammate's one friendly prompt line drops the score from 0.950 to 0.875 and SIA's gate fails it with exit code 1">
   </a>
 </p>
 
