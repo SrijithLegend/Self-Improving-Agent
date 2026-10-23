@@ -4,6 +4,11 @@
 
 [![A one-line prompt edit fails the SIA gate with exit 1](docs/assets/hero.jpg)](docs/assets/sia-launch.mp4)
 
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)
+[![tests](https://github.com/SrijithLegend/Self-Improving-Agent/actions/workflows/tests.yml/badge.svg)](https://github.com/SrijithLegend/Self-Improving-Agent/actions/workflows/tests.yml)
+![Local first](https://img.shields.io/badge/local%20mode-no%20account%20needed-555)
+![FastAPI](https://img.shields.io/badge/hosted%20API-FastAPI-009688?logo=fastapi&logoColor=white)
+
 ## What is SIA?
 
 If your app uses an AI model, the **prompt** (the instructions you give the model) controls how it behaves. A small
