@@ -1,6 +1,6 @@
-# SIA DevTools
+<h1 align="center">SIA DevTools</h1>
 
-**Ship prompt changes only when your own test cases prove they help.**
+<p align="center"><b>Ship prompt changes only when your own test cases prove they help.</b></p>
 
 <p align="center">
   <a href="docs/assets/sia-launch.mp4">
