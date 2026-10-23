@@ -131,6 +131,25 @@ sia dashboard     # opens at http://127.0.0.1:8000/dashboard
 
 Add `--help` to any command to see all its options, for example `sia eval gate --help`.
 
+## Status
+
+> **Public beta.** SIA works and is tested, but it is not production-ready yet. See what's missing in
+> [`docs/AUDIT.md`](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/docs/AUDIT.md#3-production-readiness-not-yet),
+> and read [`SECURITY.md`](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/SECURITY.md) before
+> running it as a server.
+
+## License
+
+SIA uses the **Functional Source License, version 1.1, with an Apache 2.0 future license**
+([FSL-1.1-ALv2](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/LICENSE.md)).
+
+- **You can** use it, change it and self-host it for free, inside your company or for clients, for research and
+  for teaching.
+- **You can't** sell it, or something very similar built from it, as a product or hosted service that competes
+  with SIA.
+- **Two years after each release**, that release also becomes available under the Apache License 2.0, with no
+  restrictions.
+
 ## Star History
 
 <a href="https://www.star-history.com/#SrijithLegend/Self-Improving-Agent&Date">
