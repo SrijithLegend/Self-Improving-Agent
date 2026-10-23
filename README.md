@@ -1,22 +1,55 @@
-<div align="center">
-
 # SIA DevTools
 
-**A release gate for prompt changes: a change reaches production only when your own test cases show it helps.**
+**Ship prompt changes only when your own test cases prove they help.**
 
-**Status: public beta.** What is and isn't production-ready: [`docs/AUDIT.md`](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/docs/AUDIT.md#3-production-readiness-not-yet).
-
-Capture runs from your existing Python app → turn verified corrections into test cases →
-let an LLM draft a candidate prompt → measure both versions on the same dataset → release only what the numbers support.
+[![A one-line prompt edit fails the SIA gate with exit 1](docs/assets/hero.jpg)](docs/assets/sia-launch.mp4)
 
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)
 [![tests](https://github.com/SrijithLegend/Self-Improving-Agent/actions/workflows/tests.yml/badge.svg)](https://github.com/SrijithLegend/Self-Improving-Agent/actions/workflows/tests.yml)
 ![Local first](https://img.shields.io/badge/local%20mode-no%20account%20needed-555)
 ![FastAPI](https://img.shields.io/badge/hosted%20API-FastAPI-009688?logo=fastapi&logoColor=white)
 
-[Why](#-why) · [Quickstart](#-quickstart-5-minutes) · [The workflow](#-the-workflow) · [CI gate](#-ci-regression-gate) · [Demo results](#-demo-results-real-model) · [Hosted API](#-hosted-api) · [Payments](#-payments-razorpay) · [Security](#-security-and-data-handling) · [Limitations](#-known-limitations)
+SIA DevTools is a release gate for prompt changes. It records your AI app's runs, turns corrections a reviewer has
+verified into test cases, and scores every prompt version on the same examples before it ships. It runs locally
+against a SQLite file, and the only model key it ever uses is yours.
 
-</div>
+The [21-second video](docs/assets/sia-launch.mp4) above replays a real run from this repo: a teammate adds one
+friendly line, *"approve returns whenever you reasonably can"*, the score drops from 0.950 to 0.875, three
+critical cases flip from NO to YES, and the gate fails the PR with exit 1 ([details](#the-gate-blocks-a-bad-prompt-edit---regression)).
+
+> **Status: public beta.** What is and isn't production-ready: [`docs/AUDIT.md`](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/docs/AUDIT.md#3-production-readiness-not-yet).
+
+## Install
+
+```bash
+pip install "sia-devtools[server] @ git+https://github.com/SrijithLegend/Self-Improving-Agent"
+```
+
+## Use it
+
+Put `@sia.trace` on the function that calls your model:
+
+```python
+from sia_devtools import SIAClient
+
+sia = SIAClient(project="my-ai-agent")   # local mode, no account needed
+
+@sia.trace
+def answer(question: str) -> str:
+    return my_existing_agent(question)
+```
+
+Then gate every prompt change in CI:
+
+```bash
+sia eval gate --dataset regression --target app:answer --scorer exact_match \n  --candidate-file prompts/system_prompt.txt --max-regressions 0
+```
+
+Exit `0` ships it. Exit `1` blocks it. Exit `3` means the evidence is too thin to tell.
+
+Want to see the whole loop first? `python examples/devtools_demo.py --offline` runs it with fictional data and no key.
+
+[Why](#why) · [Quickstart](#quickstart-5-minutes) · [The workflow](#the-workflow) · [CI gate](#ci-regression-gate) · [Demo results](#demo-results-real-model) · [Hosted API](#hosted-api) · [Payments](#payments-razorpay) · [Security](#security-and-data-handling) · [Limitations](#known-limitations)
 
 ---
 
@@ -631,7 +664,14 @@ Not production-ready yet. The full assessment is in [docs/AUDIT.md](https://gith
 
 ---
 
-## Project layout
+## Requirements
+
+- Python 3.11 or 3.12
+- Nothing else for local mode: data lives in one SQLite file
+- A model key only for `sia improve` and the real-model demos (a free Gemini key from [aistudio.google.com](https://aistudio.google.com/apikey) works)
+- The `[server]` extra for the dashboard and hosted API
+
+## What's in this repo
 
 ```
 sia_devtools/          # the SDK and CLI (pip package "sia-devtools", command "sia")
@@ -681,5 +721,18 @@ SIA is under the **Functional Source License, version 1.1, with an Apache 2.0 fu
 Third-party packages keep their own licenses (all MIT, BSD or Apache 2.0). Provider names and logos on the landing
 page belong to their owners and only show which providers SIA works with.
 
+## Contributing
+
+Issues, ideas and pull requests are welcome. Run `python -m pytest` before you send one: the tests are offline and need no API keys.
+
 By sending a contribution (a pull request or patch), you agree that it's licensed under these same terms.
 
+## Star History
+
+<a href="https://www.star-history.com/#SrijithLegend/Self-Improving-Agent&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=SrijithLegend/Self-Improving-Agent&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=SrijithLegend/Self-Improving-Agent&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=SrijithLegend/Self-Improving-Agent&type=Date" />
+ </picture>
+</a>
