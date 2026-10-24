@@ -1,4 +1,4 @@
-<h1 align="center">SIA DevTools</h1>
+<h1 align="center">Self Improving Agent</h1>
 
 <p align="center">
   <a href="docs/assets/sia-launch.mp4">
