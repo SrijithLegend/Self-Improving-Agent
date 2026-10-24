@@ -1,7 +1,5 @@
 <h1 align="center">SIA DevTools</h1>
 
-<p align="center"><b>Ship prompt changes only when your own test cases prove they help.</b></p>
-
 <p align="center">
   <a href="docs/assets/sia-launch.mp4">
     <img src="docs/assets/hero.jpg" width="520" alt="It looked better. It wasn't. A teammate's friendly prompt line drops the score from 0.950 to 0.875 and SIA's gate fails it with exit code 1">
