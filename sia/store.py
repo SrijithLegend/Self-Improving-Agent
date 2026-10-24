@@ -2,14 +2,13 @@
 playbook versions, episodes, eval examples, usage. Schema changes are applied as numbered migrations."""
 import hashlib
 import json
-import re
 import secrets
 import sqlite3
 import time
 import uuid
 from contextlib import closing, contextmanager
 
-from sia_devtools.store import migrate
+from sia_devtools.store import chunk_text, fts_query, migrate, tokens  # noqa: F401 (re-exported)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tenants (id TEXT PRIMARY KEY, name TEXT, key_hash TEXT UNIQUE, created REAL);
@@ -81,33 +80,6 @@ KEY_SCOPES = ("full", "ingest")  # ingest: send runs and feedback, read the acti
 
 PRIOR, PRIOR_WEIGHT = 0.7, 2  # new lessons start with a mildly optimistic utility
 PRUNE_AFTER_USES, PRUNE_BELOW = 5, 0.45
-
-
-def fts_query(text, limit=32):
-    """Turn free text into a safe FTS5 OR-query (quoted tokens, so user text can't inject FTS syntax)."""
-    words = list(dict.fromkeys(w for w in re.findall(r"\w+", text.lower()) if len(w) > 2))[:limit]
-    return " OR ".join(f'"{w}"' for w in words)
-
-
-def tokens(text):
-    return set(re.findall(r"\w+", text.lower()))
-
-
-def chunk_text(content, size=1000):
-    """Split on paragraphs, packing them into ~size-char chunks; hard-split oversized paragraphs."""
-    out, buf = [], ""
-    for para in re.split(r"\n\s*\n", content):
-        para = para.strip()
-        while len(para) > size:
-            out.append(para[:size])
-            para = para[size:]
-        if buf and len(buf) + len(para) > size:
-            out.append(buf)
-            buf = ""
-        buf = f"{buf}\n\n{para}".strip()
-    if buf:
-        out.append(buf)
-    return out
 
 
 def hash_key(key):

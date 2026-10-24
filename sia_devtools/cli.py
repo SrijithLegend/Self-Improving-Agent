@@ -415,6 +415,9 @@ def parser():
     rs = sub.add_parser("restore", parents=[db], help="replace the server database with a backup (server stopped)")
     rs.add_argument("file")
     rs.set_defaults(fn=ops("restore_cmd"))
+    ma = sub.add_parser("migrate-agents", parents=[db], help="copy managed agents into kind=agent projects "
+                                                              "(idempotent)")
+    ma.set_defaults(fn=ops("migrate_agents_cmd"))
     m = sub.add_parser("maintenance", parents=[db], help="delete expired runs, old rejected access requests, "
                                                          "unpaid orders (run daily)")
     m.set_defaults(fn=ops("maintenance_cmd"))

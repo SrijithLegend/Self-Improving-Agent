@@ -885,6 +885,36 @@ def delete_dataset_example(project_id: str, dataset_id: str, example_id: int, t=
     dev.delete_example(t["id"], project_id, dataset_id, example_id)
 
 
+# --- knowledge and memory (hosted agents) ----------------------------------------------
+@app.post("/v1/projects/{project_id}/knowledge", status_code=201)
+def add_project_knowledge(project_id: str, body: DocIn, t=Depends(tenant)):
+    """A document the agent's search_knowledge tool can search."""
+    return dev.add_knowledge(t["id"], project_id, body.title, body.content, actor(t))
+
+
+@app.get("/v1/projects/{project_id}/knowledge")
+def list_project_knowledge(project_id: str, t=Depends(tenant)):
+    return dev.knowledge_docs(t["id"], project_id)
+
+
+@app.delete("/v1/projects/{project_id}/knowledge/{doc_id}", status_code=204)
+def delete_project_knowledge(project_id: str, doc_id: str, t=Depends(tenant)):
+    dev.delete_knowledge(t["id"], project_id, doc_id, actor(t))
+
+
+@app.get("/v1/projects/{project_id}/lessons")
+def list_project_lessons(project_id: str, state: Literal["probation", "pinned", "retired"] | None = None,
+                         t=Depends(tenant)):
+    return dev.lessons(t["id"], project_id, state)
+
+
+@app.post("/v1/projects/{project_id}/lessons/{lesson_id}/{action}")
+def veto_lesson(project_id: str, lesson_id: int, action: Literal["retire", "probation"], t=Depends(tenant)):
+    """Retire a lesson (a human veto: the loop can't pin it again) or put it back in probation."""
+    return dev.set_lesson_state(t["id"], project_id, lesson_id, "retired" if action == "retire" else "probation",
+                                actor(t))
+
+
 # --- jobs ---------------------------------------------------------------------------
 @app.get("/v1/projects/{project_id}/jobs")
 def list_jobs(project_id: str, kind: str | None = None, limit: int = 50, t=Depends(tenant)):

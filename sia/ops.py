@@ -8,6 +8,7 @@ import re
 import sqlite3
 import sys
 import time
+import uuid
 from collections import Counter
 from contextlib import closing
 from pathlib import Path
@@ -236,7 +237,139 @@ def logcheck(lines, minutes=10, max_error_rate=0.05, min_requests=20, max_securi
     return 1 if reasons else 0
 
 
+# --- managed agents -> projects (SELF_IMPROVING_SPEC.md section 10) -----------------------------------------------
+AGENTS_MIGRATION = "legacy-005-agents-to-projects"
+
+
+def _slug(text):
+    s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")[:56]
+    return s or None
+
+
+def _migrate_agent(c, a, now):
+    """Copy one legacy agent into a kind="agent" project with the same id, on connection c. Returns row counts."""
+    from sia_devtools.store import dump, split_for, validate_settings
+    from sia_loop import config
+
+    from .store import PRIOR, PRIOR_WEIGHT
+    n = Counter()
+    pid, org = a["id"], a["tenant_id"]
+    name = _slug(a["domain"])
+    if not name or c.execute("SELECT 1 FROM projects WHERE org_id=? AND name=?", (org, name)).fetchone():
+        name = "agent-" + pid[:8]
+    settings = validate_settings({"kind": "agent", "agent": {"domain": a["domain"] or "", "instructions":
+                                                             a["instructions"] or "", "rubric": a["rubric"] or ""}})
+    c.execute("INSERT INTO projects VALUES (?,?,?,?,?)", (pid, org, name, json.dumps(settings), a["created"] or now))
+    n["projects"] += 1
+
+    for d in c.execute("SELECT * FROM docs WHERE agent_id=?", (pid,)).fetchall():
+        c.execute("INSERT INTO knowledge_docs VALUES (?,?,?,?,?)", (d["id"], pid, d["title"], d["chunks"], d["created"]))
+        n["knowledge_docs"] += 1
+    for ch in c.execute("SELECT text, title, doc_id FROM chunks WHERE agent_id=?", (pid,)).fetchall():
+        c.execute("INSERT INTO knowledge VALUES (?,?,?,?)", (ch["text"], ch["title"], pid, ch["doc_id"]))
+        n["knowledge_chunks"] += 1
+
+    # lessons: active ones in the top 12 by utility were in every prompt, so they become pinned; other active ones
+    # wait in probation; inactive ones are retired
+    rows = c.execute("SELECT * FROM lessons WHERE agent_id=?", (pid,)).fetchall()
+    utility = lambda r: (r["total"] + PRIOR * PRIOR_WEIGHT) / (r["uses"] + PRIOR_WEIGHT)  # noqa: E731
+    top = {r["id"] for r in sorted((r for r in rows if r["active"]), key=utility, reverse=True)[:config.MAX_LESSONS]}
+    for r in rows:
+        state = "retired" if not r["active"] else "pinned" if r["id"] in top else "probation"
+        c.execute("UPDATE lessons SET project_id=?, state=? WHERE id=?", (pid, state, r["id"]))
+        n[f"lessons_{state}"] += 1
+
+    # playbooks: the active one becomes agent_config@1 (approved and active), the others rejected candidates
+    playbooks = c.execute("SELECT * FROM playbooks WHERE agent_id=? ORDER BY active DESC, version",
+                          (pid,)).fetchall()
+    if not playbooks or not playbooks[0]["active"]:
+        playbooks = [None, *playbooks]  # nothing was active: @1 is the agent with no playbook
+    for i, pb in enumerate(playbooks, 1):
+        cfg = config.default_config(system_prompt=a["instructions"] or "", playbook=pb["content"] if pb else "",
+                                    lessons=sorted(top) if i == 1 else [])
+        cfg = config.validate(cfg, settings, lesson_ids=top)
+        active = i == 1
+        c.execute("""INSERT INTO versions (project_id, name, version, content, status, note, created_by, decided_by,
+            decision_reason, created, decided) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                  (pid, config.CONFIG_NAME, i, config.dumps(cfg), "approved" if active else "rejected",
+                   pb["note"] if pb else "migrated agent with no active playbook", "migration", "migration",
+                   "the agent's active playbook when it was migrated" if active else "inactive playbook when migrated",
+                   pb["created"] if pb else now, now))
+        if active:
+            c.execute("INSERT INTO active_versions VALUES (?,?,?,?,?)", (pid, config.CONFIG_NAME, 1, now, "migration"))
+        n["versions"] += 1
+
+    # examples -> the 'eval' dataset. Synthetic ones were written by the agent itself, so they are no longer trusted:
+    # pending, dev split only. Rejected ones are dropped.
+    exs = c.execute("SELECT * FROM examples WHERE agent_id=? AND status!='rejected' ORDER BY id", (pid,)).fetchall()
+    if exs:
+        did = uuid.uuid5(uuid.NAMESPACE_URL, f"sia:{pid}:eval").hex
+        c.execute("INSERT INTO datasets VALUES (?,?,?,1,?)", (did, pid, "eval", now))
+        for e in exs:
+            synthetic = e["source"] == "synthetic"
+            status = "pending" if synthetic or e["status"] == "pending" else "verified"
+            eid = c.execute("""INSERT INTO dataset_examples (dataset_id, input, expected, metadata, critical, source,
+                added_in, created, status) VALUES (?,?,?,?,0,?,1,?,?)""",
+                            (did, dump(e["input"]), dump(e["expected"]), dump({"legacy_example_id": e["id"]}),
+                             e["source"], e["created"], status)).lastrowid
+            c.execute("UPDATE dataset_examples SET split=? WHERE id=?",
+                      ("dev" if synthetic else split_for(did, eid, settings["loop"]["holdout_pct"]), eid))
+            n[f"examples_{status}"] += 1
+
+    # episodes -> runs (+ feedback rows for ratings and corrections, which stay pending)
+    for e in c.execute("SELECT * FROM episodes WHERE agent_id=?", (pid,)).fetchall():
+        c.execute("""INSERT INTO runs (project_id, id, name, input, output, status, started, ended, tags, metadata,
+            scores) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                  (pid, e["id"], "agent.run", dump({"task": e["task"]}), dump(e["answer"]), "success", e["created"],
+                   e["created"], json.dumps(["migrated"]), dump({"attempts": e["attempts"], "lesson_ids":
+                                                                 json.loads(e["lesson_ids"] or "[]")}),
+                   json.dumps({"self_critique": e["score"]} if e["score"] is not None else {})))
+        n["runs"] += 1
+        if e["rating"] is not None or e["correction"]:
+            c.execute("""INSERT INTO feedback (project_id, id, run_id, rating, correction, category, created)
+                VALUES (?,?,?,?,?,?,?)""", (pid, f"legacy-{e['id']}"[:64], e["id"],
+                                            1 if (e["rating"] or 0) >= 4 else -1,
+                                            dump(e["correction"]) if e["correction"] else None,
+                                            f"rating:{e['rating']}" if e["rating"] is not None else None, now))
+            n["feedback"] += 1
+    c.execute("INSERT INTO audit (project_id, actor, action, detail, created) VALUES (?,?,?,?,?)",
+              (pid, "migration", "agent.migrate", json.dumps(dict(n)), now))
+    return n
+
+
+def migrate_agents(db):
+    """Copy every managed agent that isn't a project yet into a kind="agent" project with the same id, all in one
+    transaction. Idempotent: a second run finds nothing left to copy. The legacy tables are left as they are (they are
+    dropped in a later release, after this has run). Returns the row counts."""
+    from sia_devtools.store import DevStore
+
+    from .store import Store
+    Store(db)
+    DevStore(db)  # both sets of tables exist before copying between them
+    total, now = Counter(), time.time()
+    with closing(sqlite3.connect(db, timeout=30, isolation_level=None)) as c:
+        c.row_factory = sqlite3.Row
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            for a in c.execute("SELECT * FROM agents WHERE id NOT IN (SELECT id FROM projects) ORDER BY created")\
+                    .fetchall():
+                total.update(_migrate_agent(c, a, now))
+            c.execute("INSERT OR IGNORE INTO schema_migrations VALUES (?,?)", (AGENTS_MIGRATION, now))
+            c.execute("COMMIT")
+        except BaseException:
+            c.execute("ROLLBACK")
+            raise
+    return dict(total)
+
+
 # --- CLI entry points (argparse namespaces from sia_devtools/cli.py) ---------------------------------------------
+def migrate_agents_cmd(a):
+    counts = migrate_agents(a.db)
+    print(json.dumps({"event": "migrate_agents", **counts}) if counts else "nothing to migrate: every agent is "
+          "already a project")
+    return 0
+
+
 def backup_cmd(a):
     return backup(a.db, a.dir, a.keep)
 

@@ -40,6 +40,33 @@ REDACTORS = {
 DEFAULT_REDACT = ["secrets", "cards"]
 
 
+def fts_query(text, limit=32):
+    """Turn free text into a safe FTS5 OR-query (quoted tokens, so user text can't inject FTS syntax)."""
+    words = list(dict.fromkeys(w for w in re.findall(r"\w+", text.lower()) if len(w) > 2))[:limit]
+    return " OR ".join(f'"{w}"' for w in words)
+
+
+def tokens(text):
+    return set(re.findall(r"\w+", text.lower()))
+
+
+def chunk_text(content, size=1000):
+    """Split on paragraphs, packing them into ~size-char chunks; hard-split oversized paragraphs."""
+    out, buf = [], ""
+    for para in re.split(r"\n\s*\n", content):
+        para = para.strip()
+        while len(para) > size:
+            out.append(para[:size])
+            para = para[size:]
+        if buf and len(buf) + len(para) > size:
+            out.append(buf)
+            buf = ""
+        buf = f"{buf}\n\n{para}".strip()
+    if buf:
+        out.append(buf)
+    return out
+
+
 # Verhoeff checksum tables (dihedral group D5), used for Aadhaar numbers
 _VD = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
        [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
@@ -213,7 +240,20 @@ CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, 
     run_after REAL, started REAL, finished REAL, created REAL, locked_by TEXT, heartbeat REAL);
 CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs(status, run_after);
 CREATE INDEX IF NOT EXISTS idx_jobs_project ON jobs(project_id, created)
+"""), ("devtools-005-memory-knowledge", """
+CREATE TABLE IF NOT EXISTS lessons (id INTEGER PRIMARY KEY, agent_id TEXT, text TEXT, source TEXT,
+    uses INTEGER DEFAULT 0, total REAL DEFAULT 0, active INTEGER DEFAULT 1, created REAL);
+ALTER TABLE lessons ADD COLUMN project_id TEXT;
+ALTER TABLE lessons ADD COLUMN state TEXT NOT NULL DEFAULT 'probation';
+CREATE INDEX IF NOT EXISTS idx_lessons_project ON lessons(project_id, state);
+CREATE TABLE IF NOT EXISTS knowledge_docs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, title TEXT, chunks INTEGER,
+    created REAL);
+CREATE INDEX IF NOT EXISTS idx_knowledge_docs ON knowledge_docs(project_id, created);
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge USING fts5(text, title UNINDEXED, project_id UNINDEXED, doc_id UNINDEXED);
+CREATE TABLE IF NOT EXISTS lookup_tables (project_id TEXT NOT NULL, name TEXT NOT NULL, rows TEXT NOT NULL,
+    size INTEGER NOT NULL, created REAL, PRIMARY KEY (project_id, name))
 """)]
+LESSON_STATES = ("probation", "pinned", "retired")
 SPLITS = ("dev", "holdout")
 
 RUN_STATUSES = ("running", "success", "error")
@@ -463,7 +503,7 @@ class DevStore:
 
     # every table keyed by project_id; dataset_examples hang off datasets
     PROJECT_TABLES = ("runs", "feedback", "evaluations", "eval_results", "comparisons", "versions", "active_versions",
-                      "audit")
+                      "audit", "jobs", "lessons", "knowledge_docs", "knowledge", "lookup_tables")
 
     @classmethod
     def purge_project(cls, c, pid):
@@ -1125,8 +1165,11 @@ class DevStore:
             raise ValidationError("lessons and patterns must be lists")
         with self._conn(write=True) as c:
             p = self._project(c, org, pid)
+            if name == "agent_config":  # the self-improving agent's bundle: every rule is checked on every write
+                from sia_loop import config
+                content = config.dumps(config.validate(content, p["settings"], *self._config_refs(c, pid)))
             missing = [t for t in p["settings"]["locked_text"] if t not in content]
-            if missing:  # locked rules (e.g. safety instructions) can't be edited away by an improvement
+            if missing and name != "agent_config":  # locked rules can't be edited away by an improvement
                 raise ValidationError(f"Candidate drops locked text required by project settings: {missing}")
             if parent_version is not None:
                 self._version(c, pid, name, parent_version)
@@ -1138,6 +1181,104 @@ class DevStore:
                        _text(note, "note", 2000), actor, time.time()))
             self._audit(c, pid, actor, "version.create", {"name": name, "version": num})
             return self._version(c, pid, name, num)
+
+    @staticmethod
+    def _config_refs(c, pid):
+        """What an agent_config may point at: the project's lessons that aren't retired, and {example_id: split}
+        for its live, verified dataset examples."""
+        lessons = {r[0] for r in c.execute("SELECT id FROM lessons WHERE project_id=? AND state!='retired'", (pid,))}
+        splits = {r[0]: r[1] for r in c.execute("""SELECT e.id, e.split FROM dataset_examples e JOIN datasets d
+            ON d.id=e.dataset_id WHERE d.project_id=? AND e.removed_in IS NULL AND e.status='verified'""", (pid,))}
+        return lessons, splits
+
+    def config_refs(self, org, pid):
+        with self._conn() as c:
+            self._project(c, org, pid)
+            return self._config_refs(c, pid)
+
+    # --- knowledge (documents the hosted agent can search) ----------------------
+    def add_knowledge(self, org, pid, title, content, actor=None):
+        title, content = _text(title, "title", 300, required=True), _text(content, "content", 2_000_000, True)
+        did, parts = uuid.uuid4().hex, chunk_text(content)
+        with self._conn(write=True) as c:
+            self._project(c, org, pid)
+            c.execute("INSERT INTO knowledge_docs VALUES (?,?,?,?,?)", (did, pid, title, len(parts), time.time()))
+            c.executemany("INSERT INTO knowledge VALUES (?,?,?,?)", [(t, title, pid, did) for t in parts])
+            self._audit(c, pid, actor, "knowledge.add", {"doc_id": did, "title": title, "chunks": len(parts)})
+        return {"doc_id": did, "title": title, "chunks": len(parts)}
+
+    def knowledge_docs(self, org, pid):
+        with self._conn() as c:
+            self._project(c, org, pid)
+            return [dict(r) for r in c.execute("SELECT id, title, chunks, created FROM knowledge_docs WHERE "
+                                               "project_id=? ORDER BY created", (pid,))]
+
+    def delete_knowledge(self, org, pid, doc_id, actor=None):
+        with self._conn(write=True) as c:
+            self._project(c, org, pid)
+            if not c.execute("DELETE FROM knowledge_docs WHERE id=? AND project_id=?", (doc_id, pid)).rowcount:
+                raise NotFound("Document not found.")
+            c.execute("DELETE FROM knowledge WHERE doc_id=? AND project_id=?", (doc_id, pid))
+            self._audit(c, pid, actor, "knowledge.delete", {"doc_id": doc_id})
+
+    def search_knowledge(self, org, pid, text, k=5):
+        query = fts_query(text)
+        with self._conn() as c:
+            self._project(c, org, pid)
+            if not query or k <= 0:
+                return []
+            return [dict(r) for r in c.execute("SELECT text, title, doc_id FROM knowledge WHERE knowledge MATCH ? AND "
+                                               "project_id=? ORDER BY rank LIMIT ?", (query, pid, int(k)))]
+
+    def random_knowledge(self, org, pid, n):
+        with self._conn() as c:
+            self._project(c, org, pid)
+            return [dict(r) for r in c.execute("SELECT text, title FROM knowledge WHERE project_id=? "
+                                               "ORDER BY random() LIMIT ?", (pid, int(n)))]
+
+    # --- lessons (the agent's memory; policy lives in sia_loop/memory.py) -------
+    def add_lesson(self, org, pid, text, source):
+        """Store a lesson in probation unless a near-duplicate is already there. Returns the new id or None. A
+        lesson in probation is never in a production prompt: only a promoted agent_config can pin it."""
+        text = _text(text, "lesson", 500, required=True).strip()
+        new = tokens(text)
+        with self._conn(write=True) as c:
+            self._project(c, org, pid)
+            for (old,) in c.execute("SELECT text FROM lessons WHERE project_id=? AND state!='retired'", (pid,)):
+                if len(new & tokens(old)) / max(len(new | tokens(old)), 1) > 0.6:
+                    return None
+            lid = c.execute("INSERT INTO lessons (project_id, text, source, state, created) VALUES (?,?,?,?,?)",
+                            (pid, text, _text(source, "source", 50, True), "probation", time.time())).lastrowid
+            self._audit(c, pid, "sia-loop", "lesson.add", {"lesson_id": lid, "source": source})
+            return lid
+
+    def lessons(self, org, pid, state=None):
+        if state not in (None, *LESSON_STATES):
+            raise ValidationError(f"state must be one of {LESSON_STATES}")
+        with self._conn() as c:
+            self._project(c, org, pid)
+            return [dict(r) for r in c.execute(
+                "SELECT id, text, source, state, uses, total, created FROM lessons WHERE project_id=? "
+                + ("AND state=? " if state else "") + "ORDER BY id", (pid, *([state] if state else [])))]
+
+    def set_lesson_state(self, org, pid, lid, state, actor=None):
+        if state not in LESSON_STATES:
+            raise ValidationError(f"state must be one of {LESSON_STATES}")
+        with self._conn(write=True) as c:
+            self._project(c, org, pid)
+            row = c.execute("SELECT state FROM lessons WHERE id=? AND project_id=?", (lid, pid)).fetchone()
+            if not row:
+                raise NotFound("Lesson not found.")
+            c.execute("UPDATE lessons SET state=? WHERE id=?", (state, lid))
+            self._audit(c, pid, actor, f"lesson.{state}", {"lesson_id": lid, "from": row["state"]})
+        return {"id": lid, "state": state}
+
+    def credit_lessons(self, org, pid, ids, score):
+        """Add one trusted outcome (0..1) to each lesson's record. Only trusted signals call this (memory.py)."""
+        with self._conn(write=True) as c:
+            self._project(c, org, pid)
+            c.executemany("UPDATE lessons SET uses=uses+1, total=total+? WHERE id=? AND project_id=?",
+                          [(float(score), lid, pid) for lid in ids])
 
     def versions(self, org, pid, name=None):
         with self._conn() as c:
