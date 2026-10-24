@@ -278,3 +278,33 @@ def test_a_provider_outage_stops_the_cycle_without_a_decision(agent, monkeypatch
     assert v["status"] == "rejected" and "stopped before a decision" in v["decision_reason"]
     assert dev.active_version(LOCAL_ORG, pid, config.CONFIG_NAME)["version"] == 1
     assert dev.canary(LOCAL_ORG, pid, config.CONFIG_NAME) is None
+
+
+def test_g8_every_autonomous_action_is_audited_with_its_evidence(agent):
+    dev, pid, _ = agent
+    from sia_loop import cycle
+    rec = cycle.run_cycle(dev, LOCAL_ORG, pid, payload={"operators": ["rewrite_playbook", "edit_system_prompt"]})
+    mine = [a for a in dev.audit(LOCAL_ORG, pid, 500) if a["actor"] == "sia-loop"]
+    actions = {a["action"] for a in mine}
+    assert {"version.create", "version.reject", "version.approve", "canary.started", "loop.cycle",
+            "evaluation.create", "comparison.create"} <= actions
+    approve = next(a for a in mine if a["action"] == "version.approve")["detail"]
+    assert approve["comparison_id"] == rec["holdout_comparison"] and not approve["override"]  # evidence, no override
+    assert all(a["detail"].get("reason") for a in mine if a["action"] == "version.reject")
+
+
+def test_g10_no_tool_code_can_execute_what_an_agent_wrote():
+    """The actor, the optimizer and the tools never call exec, eval, compile or __import__, and never import
+    subprocess, importlib, pickle or marshal (checked on the syntax tree, so docstrings may mention them)."""
+    import ast
+    root = Path(__file__).resolve().parents[1] / "sia_loop"
+    calls, modules = {"exec", "eval", "compile", "__import__"}, {"subprocess", "importlib", "pickle", "marshal"}
+    for f in [*(root / "tools").glob("*.py"), root / "actor.py", root / "optimizer.py"]:
+        for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                assert node.func.id not in calls, f"{f.name}:{node.lineno} calls {node.func.id}"
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+                assert (node.value.id, node.attr) != ("os", "system"), f"{f.name}:{node.lineno}"
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                names = [n.name for n in node.names] + ([node.module] if isinstance(node, ast.ImportFrom) else [])
+                assert not {(n or "").split(".")[0] for n in names} & modules, f"{f.name}:{node.lineno} {names}"
