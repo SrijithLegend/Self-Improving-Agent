@@ -7,20 +7,23 @@ monthly llm_calls quota like any other.
 """
 import os
 
-from sia.llm import LLM, LLMError
+from sia.llm import LLM
+from sia_devtools.errors import ValidationError
 
 factory = LLM  # tests swap this for a scripted model
 
 
 def server_key(provider):
-    return os.getenv(f"SIA_LLM_KEY_{provider.upper()}", "")
+    """SIA_LLM_KEY_<PROVIDER>; for gemini, the older SIA_DEFAULT_LLM_KEY still works (sia doctor warns about it)."""
+    return os.getenv(f"SIA_LLM_KEY_{provider.upper()}", "") or (
+        os.getenv("SIA_DEFAULT_LLM_KEY", "") if provider == "gemini" else "")
 
 
 def make(provider, chain, key=None):
     """An LLM for `provider` trying the models in `chain` in order. key=None uses the server-side key."""
     key = key if key is not None else server_key(provider)
     if not key and provider != "ollama":
-        raise LLMError(f"No model key for {provider}: set SIA_LLM_KEY_{provider.upper()} on the server (background "
+        raise ValidationError(f"No model key for {provider}: set SIA_LLM_KEY_{provider.upper()} on the server (background "
                        "jobs can't use a key sent with a request; those are never stored).")
     return factory(provider, key, ",".join(chain) if isinstance(chain, (list, tuple)) else chain)
 

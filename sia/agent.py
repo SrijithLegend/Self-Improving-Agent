@@ -1,248 +1,221 @@
-"""The self-improvement loop.
+"""Deprecated: the managed-agents API (/v1/agents) as a thin wrapper over kind="agent" projects.
 
-An agent improves the way a person does, at three timescales:
-  1. Within a task   - draft, self-critique against a rubric, revise (run).
-  2. Across tasks    - distil each episode into short reusable lessons; lessons that keep
-                       coinciding with good outcomes rise, ones that coincide with failures are retired.
-  3. Consolidation   - periodically rewrite the agent's playbook (its strategy prompt) from the
-                       lessons and failures, and compare it with the current one on the eval set (improve).
-                       It is activated only when asked to and only if the comparison says "improved".
-Learning signals: self-critique, verified human corrections, and self-study on supplied documents.
+An agent is now a project with settings.kind = "agent" (a migrated agent keeps its id). Everything it learns goes
+through the self-improving loop (sia_loop) and its gate:
+  run       -> sia_loop.actor.perform with the active agent_config; reflection adds lessons in probation only
+  feedback  -> pending feedback, and a pending example for a correction; nothing changes until it is verified
+  verify    -> a verified example, and probation lessons from it
+  study / evaluate / improve -> background jobs (`sia worker` runs them)
+This module and /v1/agents are removed in a later release (SELF_IMPROVING_SPEC.md phase 7): use /v1/projects.
 """
-from statistics import mean
+import re
+import uuid
 
-from sia_devtools.scoring import compare_scores
+from sia_devtools.errors import NotFound, ValidationError
+from sia_loop import actor, config, jobs, memory, models
 
-from .llm import LLMError
-from .store import Store
-
-PASS_SCORE = 0.75          # critique score (0..1) that counts as "good enough"
-ADOPT_MARGIN = 0.02        # a new playbook must beat the current one by this much on the eval set...
-                           # ...and by more than the noise (one standard error of the per-example gains)
-MIN_EXAMPLES = 3           # fewer eval examples than this can never show an improvement ("inconclusive")
-
-DEFAULT_RUBRIC = ("Correctness and factual accuracy; completeness for what was asked; "
-                  "grounded in the reference knowledge when relevant (no invented facts); "
-                  "clear, actionable, appropriately concise.")
+DATASET = "eval"
 
 
-def build_system(agent, playbook, lessons, knowledge):
-    parts = [f"You are an expert agent specialized in: {agent['domain']}."]
-    if agent["instructions"]:
-        parts.append(agent["instructions"])
-    if playbook:
-        parts.append("## Your playbook (strategy refined from experience)\n" + playbook)
-    if lessons:
-        parts.append("## Lessons learned from past tasks\n" + "\n".join(f"- {l['text']}" for l in lessons))
-    if knowledge:
-        parts.append("## Reference knowledge\n" + "\n\n".join(
-            f"[{i}] ({k['title']}) {k['text']}" for i, k in enumerate(knowledge, 1)))
-        parts.append("Use the reference knowledge when relevant.")
-    parts.append("If information you need is missing, say so instead of inventing it.")
-    return "\n\n".join(parts)
+def _slug(text):
+    return re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")[:48] or "agent"
+
+
+def create(dev, org, name, domain, instructions="", rubric="", by=None, max_projects=None):
+    """A new kind="agent" project with agent_config@1 (the instructions as its system prompt) approved and active."""
+    taken = {p["name"] for p in dev.projects(org)}
+    if max_projects is not None and len(taken) >= max_projects:
+        from sia_devtools.errors import QuotaExceeded
+        raise QuotaExceeded(f"This plan includes {max_projects} project(s); a hosted agent is a project.")
+    pname = _slug(name)
+    if pname in taken:
+        pname = f"{pname}-{uuid.uuid4().hex[:6]}"
+    p = dev.create_project(org, pname, {"kind": "agent", "agent": {"name": name, "domain": domain,
+                                                                   "instructions": instructions, "rubric": rubric}},
+                           actor=by)
+    v = dev.create_version(org, p["id"], config.dumps(config.default_config(system_prompt=instructions)),
+                           name=config.CONFIG_NAME, note="initial config", actor=by)
+    dev.approve(org, p["id"], config.CONFIG_NAME, v["version"], actor=by)
+    dev.activate(org, p["id"], config.CONFIG_NAME, v["version"], actor=by)
+    return Agent(dev, org, p["id"]).shape()
+
+
+def agents(dev, org):
+    return [Agent(dev, org, p["id"], project=p).shape() for p in dev.projects(org) if p["settings"]["kind"] == "agent"]
 
 
 class Agent:
-    def __init__(self, store: Store, llm, agent: dict):
-        self.store, self.llm, self.a = store, llm, agent
-
-    # --- 1. within a task ----------------------------------------------------
-    def _context(self, task, playbook=None):
-        knowledge = self.store.search_chunks(self.a["id"], task)
-        lessons = self.store.relevant_lessons(self.a["id"], task)
-        if playbook is None:
-            playbook = self.store.active_playbook(self.a["id"])["content"]
-        return build_system(self.a, playbook, lessons, knowledge), lessons, knowledge
-
-    def critique(self, task, answer, knowledge=(), expected=None):
-        ref = "\n".join(f"- {k['text'][:600]}" for k in knowledge)
-        prompt = (f"TASK:\n{task}\n\nANSWER TO REVIEW:\n{answer}\n\n"
-                  + (f"REFERENCE ANSWER (treat as ground truth):\n{expected}\n\n" if expected else "")
-                  + (f"REFERENCE KNOWLEDGE:\n{ref}\n\n" if ref else "")
-                  + f"RUBRIC:\n{self.a['rubric'] or DEFAULT_RUBRIC}\n\n"
-                  'Return {"score": <0-10>, "issues": [<specific problems>], "suggestion": "<how to fix>"}')
-        v = self.llm.json(f"You are a strict, fair senior reviewer in {self.a['domain']}. "
-                          "Score harshly: 10 means nothing could be improved.", prompt, temperature=0)
-        if not isinstance(v, dict):
-            v = {}
+    def __init__(self, dev, org, agent_id, key=None, project=None):
+        """key: the caller's model key for the agent's provider (None: the server-side key)."""
+        self.dev, self.org, self.id, self.key = dev, org, agent_id, key
         try:
-            score = max(0.0, min(1.0, float(v.get("score", 0)) / 10))
-        except (TypeError, ValueError):
-            score = 0.0
-        return {"score": score, "issues": list(v.get("issues") or [])[:8], "suggestion": str(v.get("suggestion", ""))}
+            self.p = project or dev.project(org, agent_id)
+        except (NotFound, ValidationError):
+            raise NotFound("Agent not found.")
+        if self.p["settings"]["kind"] != "agent":
+            raise NotFound("Agent not found.")
+        self.info = self.p["settings"]["agent"] or {}
 
-    def run(self, task, learn=True, max_revisions=2, expected=None):
-        system, lessons, knowledge = self._context(task)
-        answer = self.llm.text(system, task)
-        ids, used = [l["id"] for l in lessons], [l["text"] for l in lessons]
-        if not learn:
-            # still recorded (unscored) so users can rate or correct fast answers too
-            eid = self.store.add_episode(self.a["id"], task, answer, None, None, 1, ids)
-            return {"answer": answer, "score": None, "episode_id": eid, "attempts": 1, "critique": None,
-                    "lessons_used": used, "new_lessons": []}
+    def shape(self):
+        return {"id": self.id, "tenant_id": self.org, "name": self.info.get("name") or self.p["name"],
+                "domain": self.info.get("domain", ""), "instructions": self.info.get("instructions", ""),
+                "rubric": self.info.get("rubric", ""), "created": self.p["created"], "project": self.p["name"]}
 
-        draft, best, attempts, error = answer, None, 1, None
-        try:
-            verdict = self.critique(task, answer, knowledge, expected)
-            best = (verdict["score"], answer, verdict)
-            while best[0] < PASS_SCORE and attempts <= max_revisions:
-                answer = self.llm.text(system, (
-                    f"{task}\n\n---\nYour previous answer:\n{best[1]}\n\nReviewer feedback:\n"
-                    + "\n".join(f"- {i}" for i in best[2]["issues"]) + f"\nSuggestion: {best[2]['suggestion']}\n\n"
-                    "Write an improved, complete answer to the original task. Output only the answer."))
-                attempts += 1
-                verdict = self.critique(task, answer, knowledge, expected)
-                if verdict["score"] > best[0]:
-                    best = (verdict["score"], answer, verdict)
-        except LLMError as e:
-            error = str(e)[:300]  # learning is best-effort: keep the best answer we already have
-        if best is None:
-            eid = self.store.add_episode(self.a["id"], task, draft, None, None, attempts, ids)
-            return {"answer": draft, "score": None, "episode_id": eid, "attempts": attempts, "critique": None,
-                    "lessons_used": used, "new_lessons": [], "learning_error": error}
-        score, answer, verdict = best
+    def _active(self):
+        v = self.dev.active_version(self.org, self.id, config.CONFIG_NAME)
+        if v is None:
+            raise ValidationError("This agent has no active agent_config.")
+        return v
 
-        new = self.reflect(task, draft, answer, verdict, attempts)
-        self.store.credit_lessons(ids, score)
-        eid = self.store.add_episode(self.a["id"], task, answer, score, verdict, attempts, ids)
-        out = {"answer": answer, "score": round(score, 3), "episode_id": eid, "attempts": attempts,
-               "critique": verdict, "lessons_used": used, "new_lessons": new}
-        return {**out, "learning_error": error} if error else out
+    def _llm(self):
+        return models.for_config(config.parse(self._active()["content"]), self.key)
 
-    # --- 2. across tasks -----------------------------------------------------
-    def reflect(self, task, draft, final, verdict, attempts):
-        """Distil the episode into reusable lessons. Nothing to learn from a perfect first draft."""
-        if verdict["score"] >= 0.95 and attempts == 1:
-            return []
-        prompt = (f"TASK:\n{task}\n\nFIRST DRAFT:\n{draft[:3000]}\n\n"
-                  + (f"REVISED ANSWER:\n{final[:3000]}\n\n" if final != draft else "")
-                  + f"REVIEW (score {verdict['score']:.2f}): {verdict['issues']} {verdict['suggestion']}\n\n"
-                  "Extract at most 2 lessons that would make FUTURE answers in this domain better. Each lesson: "
-                  "one imperative sentence under 30 words, general enough to apply to other tasks, not a "
-                  'restatement of this task\'s facts. Return {"lessons": [..]} (empty list if nothing general).')
-        return self._save_lessons(prompt, "reflection")
+    def _dataset(self):
+        return self.dev.create_dataset(self.org, self.id, DATASET, actor="sia-loop")
 
-    def _save_lessons(self, prompt, source):
-        try:
-            out = self.llm.json(f"You are a coach extracting durable know-how for an expert in {self.a['domain']}.",
-                                prompt)
-        except LLMError:
-            return []  # learning is best-effort; never fail the user's task because reflection misfired
-        lessons = out.get("lessons") if isinstance(out, dict) else None
-        saved = []
-        for text in (lessons if isinstance(lessons, list) else [])[:2]:
-            if isinstance(text, str) and self.store.add_lesson(self.a["id"], text, source):
-                saved.append(text.strip())
-        return saved
+    # --- profile -------------------------------------------------------------------------------------------------
+    def update(self, by=None, **fields):
+        """Edit the profile. New instructions become the system prompt of a new agent_config version, approved and
+        activated by this human edit (with the reason in the audit log)."""
+        agent = {**self.info, **{k: v for k, v in fields.items() if v is not None}}
+        self.dev.update_project(self.org, self.id, {"agent": agent}, actor=by)
+        if fields.get("instructions") is not None and fields["instructions"] != self.info.get("instructions"):
+            active = self._active()
+            cfg = {**config.parse(active["content"]), "system_prompt": fields["instructions"]}
+            v = self.dev.create_version(self.org, self.id, config.dumps(cfg), name=config.CONFIG_NAME,
+                                        parent_version=active["version"], note="instructions edited", actor=by)
+            self.dev.approve(self.org, self.id, config.CONFIG_NAME, v["version"],
+                             override_reason="instructions edited by a person through PATCH /v1/agents", actor=by)
+            self.dev.activate(self.org, self.id, config.CONFIG_NAME, v["version"], actor=by)
+        self.__init__(self.dev, self.org, self.id, self.key)
+        return self.shape()
+
+    def stats(self):
+        runs = self.dev.export_runs(self.org, self.id, name="agent.run", root_only=True)
+        scores = [r["scores"]["self_critique"] for r in runs if "self_critique" in (r["scores"] or {})]
+        avg = lambda xs: round(sum(xs) / len(xs), 3) if xs else None  # noqa: E731
+        half = min(20, len(scores) // 2)
+        active = self.dev.active_version(self.org, self.id, config.CONFIG_NAME)
+        ds = self.dev.datasets(self.org, self.id, DATASET)
+        examples = self.dev.dataset(self.org, self.id, ds[0]["id"], include_pending=True)["examples"] if ds else []
+        since = [r for r in runs if active and r["started"] > (active.get("decided") or 0)]
+        return {"episodes": len(scores), "avg_score_first_20": avg(scores[:half]),
+                "avg_score_last_20": avg(scores[len(scores) - half:] if half else []),
+                "active_lessons": len(self.dev.lessons(self.org, self.id, "pinned")),
+                "probation_lessons": len(self.dev.lessons(self.org, self.id, "probation")),
+                "documents": len(self.dev.knowledge_docs(self.org, self.id)),
+                "eval_examples": sum(e["status"] == "verified" for e in examples),
+                "pending_examples": sum(e["status"] == "pending" for e in examples),
+                "playbook_version": active["version"] if active else 0, "playbook_score": None,
+                "episodes_since_last_improve": len(since), "improve_recommended": len(since) >= 10}
+
+    def playbook(self):
+        return config.parse(self._active()["content"])["playbook"]
+
+    # --- work and feedback -----------------------------------------------------------------------------------------
+    def run(self, task, learn=True):
+        out = actor.perform(self.dev, self.org, self.id, task, key=self.key, revise=learn, learn=learn)
+        return {"answer": out["answer"], "score": out["self_critique"], "episode_id": out["run_id"],
+                "attempts": out["attempts"], "critique": out["critique"], "lessons_used": out["lessons_used"],
+                "new_lessons": out["new_lessons"], "llm_calls": out["llm_calls"],
+                **({"learning_error": out["error"]} if out.get("error") else {})}
 
     def feedback(self, episode_id, rating, correction=None, comment=None):
-        """Ratings re-credit the lessons used. A correction is stored as a *pending* eval example: user text can be
-        wrong or malicious, so it reaches the eval set and the lessons only after verify_example()."""
-        ep = self.store.episode(self.a["id"], episode_id)
-        if not ep:
-            raise KeyError("episode not found")
-        self.store.set_feedback(episode_id, rating, correction or comment)
-        self.store.credit_lessons(ep["lesson_ids"], (rating - 1) / 4)
-        pending = self.store.add_example(self.a["id"], ep["task"], correction, "feedback", "pending",
-                                         episode_id) if correction else None
-        return {"episode_id": episode_id, "pending_example_id": pending, "new_lessons": []}
+        """A 1-5 rating becomes good (4-5) or bad feedback, stored as pending. A correction also becomes a pending
+        example: user text can be wrong or malicious, so it is never tested or learned from until verified."""
+        run = self.dev.run(self.org, self.id, episode_id)
+        self.dev.add_feedback(self.org, self.id, episode_id, 1 if rating >= 4 else -1, correction=correction,
+                              category=f"rating:{rating}", explanation=comment)
+        pending = None
+        if correction:
+            task = (run["input"] or {}).get("task") if isinstance(run["input"], dict) else run["input"]
+            pending = self.dev.add_examples(self.org, self.id, self._dataset()["id"], [
+                {"input": task, "expected_output": correction}], status="pending", source="feedback",
+                source_run_id=episode_id)["ids"][0]
+        return {"episode_id": episode_id, "pending_example_id": pending, "new_lessons": [], "llm_calls": 0}
+
+    # --- examples --------------------------------------------------------------------------------------------------
+    def add_example(self, input, expected):
+        return self.dev.add_examples(self.org, self.id, self._dataset()["id"], [
+            {"input": input, "expected_output": expected}])["ids"][0]
+
+    def examples(self, include_unverified=False):
+        ds = self.dev.datasets(self.org, self.id, DATASET)
+        if not ds:
+            return []
+        rows = self.dev.dataset(self.org, self.id, ds[0]["id"], include_pending=include_unverified)["examples"]
+        return [{"id": e["id"], "input": e["input"], "expected": e["expected_output"], "source": e["source"],
+                 "status": e["status"], "split": e["split"], "created": e["created"]} for e in rows]
 
     def verify_example(self, example_id):
-        """A reviewer accepts a pending correction: it joins the eval set and the agent learns from it."""
-        ex = self.store.example(self.a["id"], example_id)
-        if not ex:
-            raise KeyError("example not found")
-        if not self.store.review_example(self.a["id"], example_id, "verified"):
-            raise ValueError(f"Example is already {ex['status']}.")
-        ep = self.store.episode(self.a["id"], ex["episode_id"]) if ex["episode_id"] else None
-        new = self._save_lessons(
-            f"TASK:\n{ex['input']}\n\n" + (f"AGENT ANSWER:\n{ep['answer'][:3000]}\n\n" if ep else "")
-            + f"VERIFIED CORRECT ANSWER:\n{ex['expected'][:3000]}\n\nWhat should the agent do differently next "
-              'time? Return {"lessons": [..]} with at most 2 general, imperative lessons under 30 words each.',
-            "feedback")
-        return {"example_id": example_id, "status": "verified", "new_lessons": new}
+        """Accept a pending example: it joins the tests (in its fixed split) and the agent takes lessons from it, in
+        probation."""
+        did = self._dataset()["id"]
+        ex = self.dev.example_row(self.org, self.id, did, example_id)
+        new_id = self.dev.review_example(self.org, self.id, did, example_id, "verified")
+        answer = None
+        if ex.get("source_run_id"):
+            try:
+                answer = self.dev.run(self.org, self.id, ex["source_run_id"])["output"]
+            except NotFound:
+                pass
+        llm = self._llm()
+        new = memory.learn_from_correction(self.dev, self.org, self.id, llm, ex["input"], answer,
+                                           ex["expected_output"], self.info.get("domain", ""))
+        return {"example_id": new_id, "status": "verified", "new_lessons": new, "llm_calls": llm.calls}
 
+    def reject_example(self, example_id):
+        self.dev.review_example(self.org, self.id, self._dataset()["id"], example_id, "rejected")
+        return {"id": example_id, "status": "rejected"}
+
+    def delete_example(self, example_id):
+        self.dev.delete_example(self.org, self.id, self._dataset()["id"], example_id)
+
+    # --- background work -------------------------------------------------------------------------------------------
     def study(self, rounds=3):
-        """Self-study: quiz itself on its own documents, grade against the source, learn from mistakes.
-        Each quiz question is also kept as an eval example so improve() has something to measure against."""
-        chunks = self.store.random_chunks(self.a["id"], rounds)
-        if not chunks:
-            raise ValueError("No knowledge to study. Add documents first.")
-        results = []
-        for c in chunks:
-            qa = self.llm.json(
-                f"You write exam questions for practitioners of {self.a['domain']}.",
-                f"SOURCE ({c['title']}):\n{c['text']}\n\nWrite one realistic task or question a user in this domain "
-                "might ask that this source answers, plus the ideal answer based strictly on the source. "
-                'Return {"question": "...", "answer": "..."}', temperature=0.8)
-            if not isinstance(qa, dict):
-                continue
-            q, expected = str(qa.get("question", "")).strip(), str(qa.get("answer", "")).strip()
-            if not q or not expected:
-                continue
-            self.store.add_example(self.a["id"], q, expected, "synthetic")
-            r = self.run(q, expected=expected)
-            results.append({"question": q, "score": r["score"], "new_lessons": r["new_lessons"]})
-        return {"studied": len(results), "results": results}
+        return self._job("study", {"rounds": rounds})
 
-    # --- 3. consolidation ----------------------------------------------------
-    def scores(self, playbook, examples, trials=1):
-        """Per-example score with this playbook, averaged over `trials` answers (grading is at temperature 0)."""
-        out = []
-        for ex in examples:
-            system, _, knowledge = self._context(ex["input"], playbook=playbook)
-            runs = []
-            for _ in range(trials):
-                answer = self.llm.text(system, ex["input"], temperature=0.3)
-                runs.append(self.critique(ex["input"], answer, knowledge, ex["expected"])["score"])
-            out.append(mean(runs))
-        return out
+    def evaluate(self, trials=1):
+        return self._job("evaluate", {"trials": trials})
 
-    def evaluate(self, playbook, examples, trials=1):
-        return mean(self.scores(playbook, examples, trials))
+    def improve(self, trials=None, activate=False, by=None):
+        """One improvement cycle. activate=True releases the winner at once, but only if it passes the holdout and
+        every promotion rule; otherwise it stays a candidate for a person to decide."""
+        payload = {"activate": bool(activate), "requested_by": by}
+        return self._job("cycle", payload)
 
-    def improve(self, max_examples=8, trials=1, activate=False):
-        """Draft a new playbook and compare it with the current one on the same eval examples. The candidate is
-        always stored; it becomes active only if `activate` is set and the verdict is "improved"."""
-        examples = self.store.examples(self.a["id"], max_examples)
-        if not examples:
-            raise ValueError("No eval examples. Add examples, give feedback with corrections, or run study first.")
-        current = self.store.active_playbook(self.a["id"])
-        lessons = self.store.top_lessons(self.a["id"], 25)
-        failures = [e for e in self.store.episodes(self.a["id"], 40)
-                    if (e["score"] is not None and e["score"] < PASS_SCORE) or (e["rating"] or 5) <= 2][:10]
-        # user corrections are left out on purpose: verified ones are already in the eval set and the lessons
-        evidence = "\n".join(f"- Task: {e['task'][:200]} | issues: {(e['critique'] or {}).get('issues')}"
-                              for e in failures)
-        candidate = self.llm.text(
-            f"You are improving the operating playbook of an AI expert in {self.a['domain']}.",
-            f"CURRENT PLAYBOOK:\n{current['content'] or '(none yet)'}\n\n"
-            "LESSONS LEARNED (most useful first):\n" + "\n".join(f"- {l['text']}" for l in lessons)
-            + f"\n\nRECENT FAILURES:\n{evidence or '(none)'}\n\n"
-            "Write the improved playbook: a concise set of principles, procedures and checks (markdown bullets, "
-            "under 350 words) that consolidates the lessons, fixes the failure patterns and keeps what already "
-            "works. Output only the playbook.", temperature=0.5).strip()
+    def _job(self, kind, payload):
+        j = jobs.enqueue(self.dev, self.org, self.id, kind, payload, unique=kind == "cycle")
+        return {"job_id": j["id"], "status": j["status"], "kind": kind, "llm_calls": 0}
 
-        old = self.scores(current["content"], examples, trials)
-        new = self.scores(candidate, examples, trials)
-        old_score, new_score = mean(old), mean(new)
-        decision = compare_scores(old, new, policy=POLICY)
-        adopted = activate and decision["verdict"] == "improved"
-        version = self.store.add_playbook(self.a["id"], candidate, round(new_score, 3), adopted,
-                                          note=f"{decision['verdict']}: {decision['reason']} "
-                                               f"(baseline {old_score:.3f} on {len(examples)} examples)")
-        if not adopted and current["version"]:
-            # keep the active version's recorded score current against today's eval set
-            self.store.x("UPDATE playbooks SET score=? WHERE agent_id=? AND active=1", round(old_score, 3), self.a["id"])
-        return {"adopted": adopted, "verdict": decision["verdict"], "reason": decision["reason"],
-                "old_score": round(old_score, 3), "new_score": round(new_score, 3), "candidate_version": version,
-                "active_version": version if adopted else current["version"], "eval_examples": len(examples),
-                "trials": trials, "playbook": candidate}
+    # --- memory and history ----------------------------------------------------------------------------------------
+    def lessons(self, include_inactive=False):
+        util = memory.utilities(self.dev, self.org, self.id)
+        rows = [lesson for lesson in self.dev.lessons(self.org, self.id)
+                if include_inactive or lesson["state"] != "retired"]
+        return [{**lesson, "active": lesson["state"] != "retired",
+                 "utility": round(util.get(lesson["id"], {}).get("utility", memory.PRIOR), 3)} for lesson in rows]
 
+    def set_lesson(self, lesson_id, enable, by=None):
+        self.dev.set_lesson_state(self.org, self.id, lesson_id, "probation" if enable else "retired", by)
+        return {"id": lesson_id, "active": bool(enable)}
 
-POLICY = {"min_examples": MIN_EXAMPLES, "min_gain": ADOPT_MARGIN, "z": 1.0}
+    def episodes(self, limit=50):
+        runs = self.dev.runs(self.org, self.id, limit=limit, root_only=True, name="agent.run")["items"]
+        fb = {}
+        for f in self.dev.feedback_list(self.org, self.id, limit=200)["items"]:
+            fb.setdefault(f["run_id"], f)
+        return [{"id": r["id"], "task": (r["input"] or {}).get("task") if isinstance(r["input"], dict) else r["input"],
+                 "answer": r["output"], "score": (r["scores"] or {}).get("self_critique"),
+                 "attempts": (r["metadata"] or {}).get("attempts"), "version": r["version"],
+                 "rating": (fb.get(r["id"]) or {}).get("category"), "created": r["started"]} for r in runs]
 
+    def playbooks(self):
+        return [{"version": v["version"], "content": config.parse(v["content"])["playbook"], "score": None,
+                 "active": v["active"], "status": v["status"], "note": v["note"], "created": v["created"]}
+                for v in self.dev.versions(self.org, self.id, config.CONFIG_NAME)]
 
-def significant_gain(old, new):
-    """Paired comparison on the same examples: the mean gain must clear ADOPT_MARGIN and one standard error."""
-    return compare_scores(old, new, policy={**POLICY, "min_examples": 1})["verdict"] == "improved"
+    def activate_playbook(self, version, by=None):
+        """Roll back (or forward) to an approved agent_config version."""
+        self.dev.activate(self.org, self.id, config.CONFIG_NAME, version, actor=by)
+        return {"active_version": version}

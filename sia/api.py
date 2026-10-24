@@ -32,8 +32,9 @@ from sia_loop import jobs
 
 from . import billing
 from . import security as sec
-from .agent import Agent
-from .llm import LLM, LLMError
+from . import agent as legacy
+from . import ops
+from .llm import LLMError
 from .store import PAID_PERIOD_DAYS, PLANS, Store
 
 app = FastAPI(title="SIA DevTools API", version="0.1.0",
@@ -42,6 +43,7 @@ app = FastAPI(title="SIA DevTools API", version="0.1.0",
 DB = os.getenv("SIA_DB", "sia.db")
 LOCAL_MODE = os.getenv("SIA_LOCAL_MODE") == "1"
 store, dev = Store(DB), DevStore(DB, custom_regex=LOCAL_MODE)  # hosted: named redaction rules only
+ops.auto_migrate_agents(DB)  # managed agents become kind="agent" projects, once
 MAX_BODY = sec.env_int("SIA_MAX_BODY_BYTES", 4 * 1024 * 1024)
 # Throttles (in-memory, per process: see sia/security.py). 0 turns one off.
 RATE_LIMIT = sec.env_int("SIA_RATE_LIMIT", 120)  # requests per organization per minute
@@ -235,20 +237,23 @@ def require_admin(request: Request, x_admin_key: str):
         raise HTTPException(403, "Admin key required.")
 
 
-def llm(x_llm_provider: str = Header(default="gemini"), x_llm_key: str = Header(default=""),
-        x_llm_model: str = Header(default=""), x_llm_base_url: str = Header(default="")):
-    # Self-hosters may set a server-side default key (e.g. their own free Gemini key).
-    key = x_llm_key or (os.getenv("SIA_DEFAULT_LLM_KEY", "") if x_llm_provider == "gemini" else "")
-    try:
-        return LLM(x_llm_provider, key, x_llm_model or None, x_llm_base_url or None)
-    except LLMError as e:
-        raise HTTPException(400, str(e))
+def caller_key(org, pid, x_llm_provider, x_llm_key):
+    """The caller's X-LLM-Key when it is for the provider the agent's config uses (another provider is a 400, so a
+    key is never sent to the wrong API). None means the server-side key for that provider."""
+    if not x_llm_key:
+        return None
+    from sia_loop import config
+    active = dev.active_version(org, pid, config.CONFIG_NAME)
+    want = config.parse(active["content"])["model"]["provider"] if active else None
+    if want and (x_llm_provider or "gemini").lower() != want:
+        raise HTTPException(400, f"This agent's config uses the {want} provider; send X-LLM-Provider: {want}.")
+    return x_llm_key
 
 
-def owned_agent(agent_id: str, t=Depends(tenant)):
-    a = store.agent(agent_id, t["id"])
-    if not a:
-        raise HTTPException(404, "Agent not found.")
+def owned_agent(agent_id: str, t=Depends(tenant), x_llm_provider: str = Header(default=""),
+                x_llm_key: str = Header(default="")):
+    a = legacy.Agent(dev, t["id"], agent_id)  # NotFound (404) for another org's id
+    a.key = caller_key(t["id"], agent_id, x_llm_provider, x_llm_key)
     return a
 
 
@@ -262,15 +267,18 @@ def llm_quota(org_id):
                             f"they reset on {next_month_start():%d %B %Y} (UTC).")
 
 
-def metered(request: Request, a, model, fn, *args):
-    """Run an LLM-using action, record its LLM calls for billing (even if it fails), add llm_calls. Capped per
-    organization and in total, since these hold a worker thread for as long as the model takes."""
-    llm_quota(a["tenant_id"])
-    with llm_slots.take(a["tenant_id"]):
+def metered(request: Request, a, fn, *args):
+    """Run an LLM-using action and record its LLM calls for billing. Capped per organization and in total, since
+    these hold a worker thread for as long as the model takes."""
+    llm_quota(a.org)
+    out = {}
+    with llm_slots.take(a.org):
         try:
-            return {**call(fn, *args), "llm_calls": model.calls}
+            out = call(fn, *args)
+            return out
         finally:
-            store.record_usage(a["tenant_id"], a["id"], request.url.path.rsplit("/", 1)[-1], model.calls)
+            store.record_usage(a.org, a.id, request.url.path.rsplit("/", 1)[-1], out.get("llm_calls", 0),
+                               project_id=a.id)
 
 
 def call(fn, *args, **kwargs):
@@ -406,12 +414,19 @@ class RunsIn(Strict):
 class TaskIn(Strict):
     task: str = Field(min_length=1, max_length=20000)
     revise: bool = Field(True, description="Let the agent critique and revise its draft (more model calls).")
+    learn: bool = Field(True, description="Reflect afterwards. New lessons wait in probation: they never change the "
+                                          "agent until a promoted config pins them.")
 
 
 class TableIn(Strict):
     name: str = Field(min_length=1, max_length=64)
     rows: list[dict] | None = Field(None, max_length=100_000)
     csv: str | None = Field(None, max_length=5_000_000, description="CSV text with a header row, instead of rows.")
+
+
+class LoopRunIn(Strict):
+    dataset: str = Field("eval", min_length=1, max_length=64)
+    operators: list[str] | None = Field(None, max_length=9, description="Try these operators instead of choosing.")
 
 
 class OutcomeIn(Strict):
@@ -934,18 +949,12 @@ def run_project_task(project_id: str, body: TaskIn, t=Depends(tenant), x_llm_pro
     """Run one task with the agent's active config, recorded as a run. The model is the one the config names: send
     X-LLM-Provider (matching it) and X-LLM-Key to use your own key, or the server's key for that provider is used."""
     llm_quota(t["id"])
-    key = None
-    if x_llm_key:
-        from sia_loop import config
-        active = dev.active_version(t["id"], project_id, config.CONFIG_NAME)
-        want = config.parse(active["content"])["model"]["provider"] if active else None
-        if want and (x_llm_provider or "gemini").lower() != want:
-            raise HTTPException(400, f"This agent's config uses the {want} provider; send X-LLM-Provider: {want}.")
-        key = x_llm_key
+    key = caller_key(t["id"], project_id, x_llm_provider, x_llm_key)
     out = {"llm_calls": 0}
     with llm_slots.take(t["id"]):
         try:
-            out = call(sia_actor.perform, dev, t["id"], project_id, body.task, key=key, revise=body.revise)
+            out = call(sia_actor.perform, dev, t["id"], project_id, body.task, key=key, revise=body.revise,
+                       learn=body.learn)
             return out
         finally:
             store.record_usage(t["id"], None, "tasks", out.get("llm_calls", 0), project_id=project_id)
@@ -969,6 +978,44 @@ def list_tables(project_id: str, t=Depends(tenant)):
 @app.delete("/v1/projects/{project_id}/tables/{name}", status_code=204)
 def delete_table(project_id: str, name: str, t=Depends(tenant)):
     dev.delete_table(t["id"], project_id, name, actor(t))
+
+
+# --- the self-improving loop -----------------------------------------------------------
+@app.get("/v1/projects/{project_id}/loop")
+def get_loop(project_id: str, t=Depends(tenant)):
+    p = dev.project(t["id"], project_id)
+    return {**p["settings"]["loop"], "kind": p["settings"]["kind"]}
+
+
+@app.patch("/v1/projects/{project_id}/loop")
+def update_loop(project_id: str, body: dict, t=Depends(tenant)):
+    """Autonomy, budgets, allowlists, schedule, holdout %. Bounds are in SELF_IMPROVING_SPEC.md section 14."""
+    return dev.update_project(t["id"], project_id, {"loop": body}, actor=actor(t))["settings"]["loop"]
+
+
+@app.post("/v1/projects/{project_id}/loop/run", status_code=202)
+def run_loop(project_id: str, body: LoopRunIn | None = None, t=Depends(tenant)):
+    """Queue one improvement cycle now (a second request while one is queued or running returns that one)."""
+    from sia_loop import optimizer
+    body = body or LoopRunIn()
+    if body.operators and set(body.operators) - set(optimizer.OPERATORS):
+        raise HTTPException(400, f"operators must be among: {', '.join(optimizer.OPERATORS)}")
+    if dev.project(t["id"], project_id)["settings"]["kind"] != "agent":
+        raise HTTPException(400, "Server-side cycles are for hosted agents (kind 'agent'); for your own app run "
+                                 "`sia loop run --target module:function`.")
+    j = jobs.enqueue(dev, t["id"], project_id, "cycle", {"dataset": body.dataset, "operators": body.operators,
+                                                         "requested_by": actor(t)}, unique=True)
+    return {"job_id": j["id"], "status": j["status"]}
+
+
+@app.get("/v1/projects/{project_id}/loop/history")
+def loop_history(project_id: str, limit: int = 50, t=Depends(tenant)):
+    """One row per cycle: what was tried, the verdicts, the cost and what happened."""
+    rows = jobs.jobs(dev, t["id"], project_id, limit, kind="cycle")
+    return [{"job_id": j["id"], "status": j["status"], "created": j["created"], "finished": j["finished"],
+             "error": j["error"], **{k: (j["result"] or {}).get(k) for k in (
+                 "outcome", "calls", "estimate", "active_version", "best", "candidates", "holdout", "evidence",
+                 "promotion")}} for j in rows]
 
 
 # --- jobs ---------------------------------------------------------------------------
@@ -1071,145 +1118,134 @@ def activate_version(project_id: str, name: str, version: int, body: ActivateIn,
     return dev.activate(t["id"], project_id, name, version, actor(t, body.reviewer))
 
 
-# --- managed agents -----------------------------------------------------------------
-@app.post("/v1/agents", status_code=201)
+# --- managed agents (deprecated aliases over kind="agent" projects; removed in a later release) ----------------
+def agent_limits(t):
+    lim = limits(t)
+    return lim["projects"] if lim else None
+
+
+@app.post("/v1/agents", status_code=201, deprecated=True)
 def create_agent(body: AgentIn, t=Depends(tenant)):
-    return store.create_agent(t["id"], body.name, body.domain, body.instructions, body.rubric)
+    return legacy.create(dev, t["id"], body.name, body.domain, body.instructions, body.rubric, by=actor(t),
+                         max_projects=agent_limits(t))
 
 
-@app.get("/v1/agents")
+@app.get("/v1/agents", deprecated=True)
 def list_agents(t=Depends(tenant)):
-    return store.agents(t["id"])
+    return legacy.agents(dev, t["id"])
 
 
-@app.get("/v1/agents/{agent_id}")
+@app.get("/v1/agents/{agent_id}", deprecated=True)
 def get_agent(a=Depends(owned_agent)):
-    return {**a, "stats": store.stats(a["id"]), "playbook": store.active_playbook(a["id"])["content"]}
+    return {**a.shape(), "stats": a.stats(), "playbook": a.playbook()}
 
 
-@app.patch("/v1/agents/{agent_id}")
-def update_agent(body: AgentPatch, a=Depends(owned_agent)):
-    store.update_agent(a["id"], **body.model_dump())
-    return store.agent(a["id"])
+@app.patch("/v1/agents/{agent_id}", deprecated=True)
+def update_agent(body: AgentPatch, a=Depends(owned_agent), t=Depends(tenant)):
+    return a.update(by=actor(t), **body.model_dump())
 
 
-@app.delete("/v1/agents/{agent_id}", status_code=204)
+@app.delete("/v1/agents/{agent_id}", status_code=204, deprecated=True)
 def delete_agent(a=Depends(owned_agent)):
-    store.delete_agent(a["id"])
+    dev.delete_project(a.org, a.id)
+    store.x("UPDATE usage SET project_id=NULL WHERE project_id=?", a.id)
 
 
-@app.post("/v1/agents/{agent_id}/knowledge", status_code=201)
+@app.post("/v1/agents/{agent_id}/knowledge", status_code=201, deprecated=True)
 def add_knowledge(body: DocIn, a=Depends(owned_agent)):
-    return store.add_doc(a["id"], body.title, body.content)
+    return dev.add_knowledge(a.org, a.id, body.title, body.content)
 
 
-@app.get("/v1/agents/{agent_id}/knowledge")
+@app.get("/v1/agents/{agent_id}/knowledge", deprecated=True)
 def list_knowledge(a=Depends(owned_agent)):
-    return store.docs(a["id"])
+    return dev.knowledge_docs(a.org, a.id)
 
 
-@app.delete("/v1/agents/{agent_id}/knowledge/{doc_id}", status_code=204)
+@app.delete("/v1/agents/{agent_id}/knowledge/{doc_id}", status_code=204, deprecated=True)
 def delete_knowledge(doc_id: str, a=Depends(owned_agent)):
-    if not store.delete_doc(a["id"], doc_id):
-        raise HTTPException(404, "Document not found.")
+    dev.delete_knowledge(a.org, a.id, doc_id)
 
 
-@app.post("/v1/agents/{agent_id}/examples", status_code=201)
+@app.post("/v1/agents/{agent_id}/examples", status_code=201, deprecated=True)
 def add_example(body: ExampleIn, a=Depends(owned_agent)):
-    return {"id": store.add_example(a["id"], body.input, body.expected, "user")}
+    return {"id": a.add_example(body.input, body.expected)}
 
 
-@app.get("/v1/agents/{agent_id}/examples")
+@app.get("/v1/agents/{agent_id}/examples", deprecated=True)
 def list_examples(include_unverified: bool = False, a=Depends(owned_agent)):
-    return store.examples(a["id"], include_unverified=include_unverified)
+    return a.examples(include_unverified)
 
 
-@app.post("/v1/agents/{agent_id}/examples/{example_id}/verify")
-def verify_example(example_id: int, request: Request, a=Depends(owned_agent), model=Depends(llm)):
-    """Accept a pending correction: it joins the eval set and the agent extracts lessons from it."""
-    return metered(request, a, model, Agent(store, model, a).verify_example, example_id)
+@app.post("/v1/agents/{agent_id}/examples/{example_id}/verify", deprecated=True)
+def verify_example(example_id: int, request: Request, a=Depends(owned_agent)):
+    """Accept a pending correction: it joins the tests, and the agent takes lessons from it (in probation)."""
+    return metered(request, a, a.verify_example, example_id)
 
 
-@app.post("/v1/agents/{agent_id}/examples/{example_id}/reject")
+@app.post("/v1/agents/{agent_id}/examples/{example_id}/reject", deprecated=True)
 def reject_example(example_id: int, a=Depends(owned_agent)):
-    if not store.review_example(a["id"], example_id, "rejected"):
-        raise HTTPException(404, "No pending example with that id.")
-    return {"id": example_id, "status": "rejected"}
+    return a.reject_example(example_id)
 
 
-@app.delete("/v1/agents/{agent_id}/examples/{example_id}", status_code=204)
+@app.delete("/v1/agents/{agent_id}/examples/{example_id}", status_code=204, deprecated=True)
 def delete_example(example_id: int, a=Depends(owned_agent)):
-    if not store.delete_example(a["id"], example_id):
-        raise HTTPException(404, "Example not found.")
+    a.delete_example(example_id)
 
 
-@app.post("/v1/agents/{agent_id}/run")
-def run(body: RunIn, request: Request, a=Depends(owned_agent), model=Depends(llm)):
-    return metered(request, a, model, Agent(store, model, a).run, body.task, body.learn, body.max_revisions)
+@app.post("/v1/agents/{agent_id}/run", deprecated=True)
+def run(body: RunIn, request: Request, a=Depends(owned_agent)):
+    """Use POST /v1/projects/{id}/tasks instead."""
+    return metered(request, a, a.run, body.task, body.learn)
 
 
-@app.post("/v1/agents/{agent_id}/feedback")
-def feedback(body: FeedbackIn, request: Request, a=Depends(owned_agent), model=Depends(llm)):
-    return metered(request, a, model, Agent(store, model, a).feedback,
-                   body.episode_id, body.rating, body.correction, body.comment)
+@app.post("/v1/agents/{agent_id}/feedback", deprecated=True)
+def feedback(body: FeedbackIn, request: Request, a=Depends(owned_agent)):
+    return metered(request, a, a.feedback, body.episode_id, body.rating, body.correction, body.comment)
 
 
-# ponytail: study/improve run synchronously (can take minutes on rate-limited free tiers);
-# move to a job queue + polling endpoint if requests start hitting proxy timeouts.
-@app.post("/v1/agents/{agent_id}/study")
-def study(body: StudyIn, request: Request, a=Depends(owned_agent), model=Depends(llm)):
-    return metered(request, a, model, Agent(store, model, a).study, body.rounds)
+@app.post("/v1/agents/{agent_id}/study", status_code=202, deprecated=True)
+def study(body: StudyIn, a=Depends(owned_agent)):
+    """Queued: practice questions from the documents become pending examples. GET /v1/jobs/{job_id} for the result."""
+    return a.study(body.rounds)
 
 
-@app.post("/v1/agents/{agent_id}/evaluate")
-def evaluate(body: EvaluateIn, request: Request, a=Depends(owned_agent), model=Depends(llm)):
-    """Score the agent as it is now on its eval set, without changing anything."""
-    def score():
-        examples = store.examples(a["id"], body.max_examples)
-        if not examples:
-            raise ValueError("No eval examples. Add examples, verify feedback corrections, or run study first.")
-        pb = store.active_playbook(a["id"])
-        scores = Agent(store, model, a).scores(pb["content"], examples, body.trials)
-        return {"score": round(sum(scores) / len(scores), 3), "playbook_version": pb["version"],
-                "trials": body.trials, "examples": [{"id": e["id"], "source": e["source"], "score": round(x, 3)}
-                                                    for e, x in zip(examples, scores)]}
-    return metered(request, a, model, score)
+@app.post("/v1/agents/{agent_id}/evaluate", status_code=202, deprecated=True)
+def evaluate(body: EvaluateIn, a=Depends(owned_agent)):
+    """Queued: scores the active config on the eval set with the project's scorers (never self-graded)."""
+    return a.evaluate(body.trials)
 
 
-@app.post("/v1/agents/{agent_id}/improve")
-def improve(body: ImproveIn, request: Request, a=Depends(owned_agent), model=Depends(llm)):
-    return metered(request, a, model, Agent(store, model, a).improve, body.max_examples, body.trials, body.activate)
+@app.post("/v1/agents/{agent_id}/improve", status_code=202, deprecated=True)
+def improve(body: ImproveIn, a=Depends(owned_agent), t=Depends(tenant)):
+    """Queued: one improvement cycle. With activate, a winner that passes the holdout and every rule is released."""
+    return a.improve(body.trials, body.activate, by=actor(t))
 
 
-@app.get("/v1/agents/{agent_id}/lessons")
+@app.get("/v1/agents/{agent_id}/lessons", deprecated=True)
 def list_lessons(include_inactive: bool = False, a=Depends(owned_agent)):
-    return store.lessons(a["id"], include_inactive)
+    return a.lessons(include_inactive)
 
 
-@app.post("/v1/agents/{agent_id}/lessons/{lesson_id}/{action}")
-def toggle_lesson(lesson_id: int, action: str, a=Depends(owned_agent)):
+@app.post("/v1/agents/{agent_id}/lessons/{lesson_id}/{action}", deprecated=True)
+def toggle_lesson(lesson_id: int, action: str, a=Depends(owned_agent), t=Depends(tenant)):
     if action not in ("enable", "disable"):
         raise HTTPException(404, "Use /enable or /disable.")
-    if not store.set_lesson_active(a["id"], lesson_id, action == "enable"):
-        raise HTTPException(404, "Lesson not found.")
-    return {"id": lesson_id, "active": action == "enable"}
+    return a.set_lesson(lesson_id, action == "enable", actor(t))
 
 
-@app.get("/v1/agents/{agent_id}/episodes")
+@app.get("/v1/agents/{agent_id}/episodes", deprecated=True)
 def list_episodes(limit: int = 50, a=Depends(owned_agent)):
-    return store.episodes(a["id"], min(max(limit, 1), 500))
+    return a.episodes(min(max(limit, 1), 200))
 
 
-@app.get("/v1/agents/{agent_id}/playbooks")
+@app.get("/v1/agents/{agent_id}/playbooks", deprecated=True)
 def list_playbooks(a=Depends(owned_agent)):
-    return store.playbooks(a["id"])
+    return a.playbooks()
 
 
-@app.post("/v1/agents/{agent_id}/playbooks/{version}/activate")
-def activate_playbook(version: int, a=Depends(owned_agent)):
-    if not store.activate_playbook(a["id"], version):
-        raise HTTPException(404, "Playbook version not found.")
-    return {"active_version": version}
+@app.post("/v1/agents/{agent_id}/playbooks/{version}/activate", deprecated=True)
+def activate_playbook(version: int, a=Depends(owned_agent), t=Depends(tenant)):
+    return a.activate_playbook(version, actor(t))
 
 
 # The landing page. Mounted last: routes registered above (/docs, /health, /v1/*, /dashboard) take priority.

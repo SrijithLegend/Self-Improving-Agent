@@ -257,8 +257,9 @@ def _migrate_agent(c, a, now):
     name = _slug(a["domain"])
     if not name or c.execute("SELECT 1 FROM projects WHERE org_id=? AND name=?", (org, name)).fetchone():
         name = "agent-" + pid[:8]
-    settings = validate_settings({"kind": "agent", "agent": {"domain": a["domain"] or "", "instructions":
-                                                             a["instructions"] or "", "rubric": a["rubric"] or ""}})
+    settings = validate_settings({"kind": "agent", "agent": {"name": a["name"] or "", "domain": a["domain"] or "",
+                                                             "instructions": a["instructions"] or "",
+                                                             "rubric": a["rubric"] or ""}})
     c.execute("INSERT INTO projects VALUES (?,?,?,?,?)", (pid, org, name, json.dumps(settings), a["created"] or now))
     n["projects"] += 1
 
@@ -360,6 +361,20 @@ def migrate_agents(db):
             c.execute("ROLLBACK")
             raise
     return dict(total)
+
+
+def auto_migrate_agents(db):
+    """Run migrate_agents once, on start, if there are agents and it has never run (spec section 10)."""
+    if not Path(db).is_file():
+        return None
+    with closing(sqlite3.connect(db, timeout=30)) as c:
+        tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "agents" not in tables or not c.execute("SELECT 1 FROM agents LIMIT 1").fetchone():
+            return None
+        if "schema_migrations" in tables and c.execute("SELECT 1 FROM schema_migrations WHERE id=?",
+                                                        (AGENTS_MIGRATION,)).fetchone():
+            return None
+    return migrate_agents(db)
 
 
 # --- CLI entry points (argparse namespaces from sia_devtools/cli.py) ---------------------------------------------

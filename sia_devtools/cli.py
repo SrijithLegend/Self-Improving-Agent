@@ -227,6 +227,8 @@ def cmd_serve(a, local_db=None):
 def cmd_worker(a):
     from sia_loop import jobs
     from sia_devtools.store import DevStore
+    from sia.ops import auto_migrate_agents
+    auto_migrate_agents(a.db)
     dev = DevStore(a.db)
     if not a.once:
         print(f"SIA worker on {a.db} ({a.concurrency} thread(s)); Ctrl+C to stop")

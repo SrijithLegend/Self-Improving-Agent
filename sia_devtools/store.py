@@ -267,6 +267,7 @@ DEFAULT_LOOP = {
     "allowed_models": ["gemini-flash-latest", "gemini-flash-lite-latest"],
     "allowed_tools": ["search_knowledge", "calculator", "lookup_table"], "allow_macros": True, "http_allowlist": [],
     "judge": {"provider": "anthropic", "model": "claude-haiku-5-5"}, "allow_same_model_judge": False,
+    "scorers": ["contains"],  # how the server-side evaluator scores answers: built-ins, regex:<pattern>, "judge"
     "auto_verify_outcomes": False, "webhook_url": None, "paused": False,
 }
 LOOP_BOUNDS = {"autonomy": (0, 3), "holdout_pct": (20, 50), "holdout_min_examples": (1, 10_000), "trials": (1, 10),
@@ -351,6 +352,14 @@ def validate_loop(new, base):
             if not isinstance(v, list) or len(v) > 20 or not all(isinstance(h, str) and HOST_RX.match(h) for h in v):
                 raise ValidationError("loop.http_allowlist must list up to 20 host names")
             out[k] = [h.lower() for h in v]
+        elif k == "scorers":
+            ok = isinstance(v, list) and 0 < len(v) <= 5 and len(set(v)) == len(v) and all(
+                isinstance(x, str) and (x in ("exact_match", "contains", "json_match", "judge") or (
+                    x.startswith("regex:") and not regex_problem(x[6:], 200))) for x in v)
+            if not ok:
+                raise ValidationError("loop.scorers must list 1-5 of exact_match, contains, json_match, judge, "
+                                      "regex:<safe pattern>")
+            out[k] = v
         elif k == "judge":
             if v is not None and (not isinstance(v, dict) or set(v) != {"provider", "model"} or not all(
                     isinstance(x, str) and MODEL_NAME_RX.match(x) for x in v.values())):
@@ -368,9 +377,9 @@ def validate_agent(v):
     """settings.agent for kind="agent" projects: what the hosted agent is for, as plain text."""
     if v is None:
         return None
-    limits = {"domain": 500, "instructions": 20_000, "rubric": 5_000}
+    limits = {"name": 200, "domain": 500, "instructions": 20_000, "rubric": 5_000}
     if not isinstance(v, dict) or set(v) - set(limits) or not all(isinstance(x, str) for x in v.values()):
-        raise ValidationError("agent must be an object with string fields domain, instructions, rubric")
+        raise ValidationError("agent must be an object with string fields name, domain, instructions, rubric")
     return {k: v.get(k, "")[:n] for k, n in limits.items()}
 
 
@@ -453,6 +462,11 @@ class DevStore:
     def _audit(c, pid, actor, action, detail):
         c.execute("INSERT INTO audit (project_id, actor, action, detail, created) VALUES (?,?,?,?,?)",
                   (pid, actor, action, json.dumps(detail, default=str), time.time()))
+
+    def _audit_now(self, pid, actor, action, detail):
+        """An audit row in its own transaction (for callers that already checked the project)."""
+        with self._conn(write=True) as c:
+            self._audit(c, pid, actor, action, detail)
 
     # --- projects -------------------------------------------------------------
     @staticmethod
@@ -843,7 +857,7 @@ class DevStore:
         return ids
 
     def add_examples(self, org, pid, did, items, allow_duplicates=False, max_examples=None, status="verified",
-                     split=None, source="user"):
+                     split=None, source="user", source_run_id=None):
         """Add examples as one new dataset version. An example whose (input, expected_output) matches a live
         example, or an earlier one in the same batch, is skipped and its existing id returned: re-running a script
         must not count the same case twice in every evaluation. If everything is skipped, the version stays.
@@ -860,8 +874,8 @@ class DevStore:
                     raise QuotaExceeded(f"This plan allows {max_examples} examples per dataset.")
             if allow_duplicates:
                 check(len(rows))
-                return {"ids": self._insert_examples(c, pid, did, rows, source, status=status, split=split),
-                        "skipped": 0}
+                return {"ids": self._insert_examples(c, pid, did, rows, source, source_run_id, status=status,
+                                                     split=split), "skipped": 0}
             seen = {(r["input"], r["expected"]): r["id"] for r in c.execute(
                 "SELECT id, input, expected FROM dataset_examples WHERE dataset_id=? AND removed_in IS NULL", (did,))}
             new, slots = [], []  # slots: an existing id, or the index of the row in `new`
@@ -874,7 +888,8 @@ class DevStore:
                     slots.append(seen[key])
                     new.append(r)
             check(len(new))
-            new_ids = self._insert_examples(c, pid, did, new, source, status=status, split=split) if new else []
+            new_ids = self._insert_examples(c, pid, did, new, source, source_run_id, status=status,
+                                            split=split) if new else []
             ids = [new_ids[s[1]] if isinstance(s, tuple) else s for s in slots]
             return {"ids": ids, "skipped": len(rows) - len(new)}
 
@@ -884,6 +899,13 @@ class DevStore:
         if not row:
             raise NotFound("Example not found (or already replaced or deleted).")
         return self._ex_out(row)
+
+    def example_row(self, org, pid, did, eid):
+        """One live example (verified or pending)."""
+        with self._conn() as c:
+            self._project(c, org, pid)
+            self._dataset(c, pid, did)
+            return self._live_example(c, did, eid)
 
     def update_example(self, org, pid, did, eid, fields):
         """Edits never change history: the old row is closed at the new version and a new row replaces it."""
@@ -1207,6 +1229,16 @@ class DevStore:
                 e.removed_in IS NULL AND e.status='verified' AND e.id IN ({','.join('?' * len(ids))})""",
                 (pid, *ids))}
         return [rows[i] for i in ids if i in rows]
+
+    def holdout_inputs(self, org, pid):
+        """The normalised input text of every holdout example the project ever had (G2: evidence about any of these
+        never reaches the optimizer, however it arrives)."""
+        from .scoring import as_text
+        with self._conn() as c:
+            self._project(c, org, pid)
+            rows = c.execute("""SELECT e.input FROM dataset_examples e JOIN datasets d ON d.id=e.dataset_id
+                WHERE d.project_id=? AND e.split='holdout'""", (pid,)).fetchall()
+        return frozenset(" ".join(as_text(load(r["input"])).split()).casefold() for r in rows)
 
     # --- lookup tables (read-only data for the lookup_table tool) ---------------
     MAX_TABLE = 5_000_000

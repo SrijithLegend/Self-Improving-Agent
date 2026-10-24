@@ -87,6 +87,7 @@ def test_delete_org_leaves_no_rows(tmp_path, monkeypatch):
     api, c = make_api(tmp_path, monkeypatch)
     a, b = org(c), org(c)
     h = {"Authorization": f"Bearer {a['api_key']}"}
+    c.post(f"/v1/admin/orgs/{a['tenant_id']}/plan", json={"plan": "pro"}, headers=ADMIN_H)  # room for 2 projects
     pid = c.post("/v1/projects", json={"name": "p"}, headers=h).json()["id"]
     c.post(f"/v1/projects/{pid}/runs", json={"runs": [{"id": "r1", "name": "x", "input": "q"}]}, headers=h)
     c.post(f"/v1/projects/{pid}/runs/r1/feedback", json={"rating": -1, "correction": "y"}, headers=h)
@@ -94,12 +95,16 @@ def test_delete_org_leaves_no_rows(tmp_path, monkeypatch):
     c.post(f"/v1/projects/{pid}/datasets/{did}/examples", json={"examples": [{"input": "q", "expected_output": "y"}]},
            headers=h)
     c.post(f"/v1/projects/{pid}/versions", json={"content": "v1"}, headers=h)
-    aid = c.post("/v1/agents", json={"name": "a", "domain": "d"}, headers=h).json()["id"]
+    aid = c.post("/v1/agents", json={"name": "a", "domain": "d"}, headers=h).json()["id"]  # a kind=agent project
     c.post(f"/v1/agents/{aid}/knowledge", json={"title": "t", "content": "facts"}, headers=h)
     c.post(f"/v1/agents/{aid}/examples", json={"input": "q", "expected": "a"}, headers=h)
-    api.store.add_lesson(aid, "Always cite the rule.", "test")
-    api.store.add_playbook(aid, "pb", 0.5, True)
-    api.store.add_episode(aid, "t", "a", 0.5, {}, 1, [])
+    api.dev.add_lesson(a["tenant_id"], aid, "Always cite the rule.", "test")
+    old = api.store.create_agent(a["tenant_id"], "legacy", "d")["id"]  # rows in the managed-agents tables too
+    api.store.add_doc(old, "t", "facts")
+    api.store.add_example(old, "q", "a", "user")
+    api.store.add_lesson(old, "Always cite the rule.", "test")
+    api.store.add_playbook(old, "pb", 0.5, True)
+    api.store.add_episode(old, "t", "a", 0.5, {}, 1, [])
     api.store.add_payment("order_1", a["tenant_id"], "pro", 100, "INR")
     other = {"Authorization": f"Bearer {b['api_key']}"}
     keep = c.post("/v1/projects", json={"name": "p"}, headers=other).json()["id"]
@@ -107,7 +112,7 @@ def test_delete_org_leaves_no_rows(tmp_path, monkeypatch):
     assert c.delete(f"/v1/admin/orgs/{a['tenant_id']}").status_code == 403
     assert c.delete(f"/v1/admin/orgs/{a['tenant_id']}", headers=ADMIN_H).status_code == 204
     assert c.delete(f"/v1/admin/orgs/{a['tenant_id']}", headers=ADMIN_H).status_code == 404
-    assert _rows_for(api.DB, a["tenant_id"], [pid, aid, did]) == {}
+    assert _rows_for(api.DB, a["tenant_id"], [pid, aid, did, old]) == {}
     assert c.get("/v1/me", headers=h).status_code == 401
     assert api.store.q("SELECT COUNT(*) n FROM usage WHERE tenant_id='deleted'")[0]["n"] > 0  # kept, anonymised
     assert c.get(f"/v1/projects/{keep}", headers=other).status_code == 200  # the other org is untouched
@@ -124,9 +129,10 @@ def test_delete_org_leaves_no_rows(tmp_path, monkeypatch):
 
 # --- S3 ---------------------------------------------------------------------------------------------------------
 def test_llm_quota_returns_402(tmp_path, monkeypatch):
+    from sia_loop import models
     from test_sia import FakeLLM
     api, c = make_api(tmp_path, monkeypatch)
-    monkeypatch.setattr(api, "LLM", lambda *a, **k: FakeLLM())
+    monkeypatch.setattr(models, "factory", FakeLLM)
     monkeypatch.setitem(api.PLANS, "free", {**api.PLANS["free"], "llm_calls_per_month": 3})
     h = {"Authorization": f"Bearer {org(c)['api_key']}", "X-LLM-Key": "x"}
     aid = c.post("/v1/agents", json={"name": "a", "domain": "d"}, headers=h).json()["id"]

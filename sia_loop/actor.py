@@ -45,6 +45,7 @@ class ActorResult:
     critique: dict | None = None
     error: str | None = None
     sources: list = field(default_factory=list)
+    draft: str | None = None      # the answer before any revision
 
 
 def build_system(cfg, ctx, knowledge=()):
@@ -168,20 +169,22 @@ def run_task(cfg, task, ctx):
     if answer is None:
         answer = ctx.llm.text(system, render(task_text, transcript) + "\n\nGive your final answer now, as plain "
                                                                      "text.", temperature=temperature)
+    draft = answer
     answer, attempts, verdict, rev_error = revise_if_needed(cfg, ctx, system, task_text, answer, knowledge)
-    return ActorResult(answer=answer, transcript=transcript, checks=run_validators(cfg["validators"], answer),
+    return ActorResult(answer=answer, draft=draft, transcript=transcript, checks=run_validators(cfg["validators"], answer),
                        calls=getattr(ctx.llm, "calls", 0) - calls0, attempts=attempts,
                        self_critique=round(verdict["score"], 3) if verdict else None, critique=verdict,
                        error=rev_error or error, sources=[k["title"] for k in knowledge])
 
 
 # --- wiring to a project's stored data ----------------------------------------------------------------------------
-def perform(dev, org, pid, task, *, key=None, revise=True, tags=(), run_id=None):
-    """Run a production task on a kind="agent" project with its active agent_config, and record it as a run.
+def perform(dev, org, pid, task, *, key=None, revise=True, learn=True, tags=(), run_id=None):
+    """Run a production task on a kind="agent" project with its active agent_config, and record it as a run. With
+    learn, a reflection afterwards may add lessons, in probation only (they never change this config).
     key: the caller's model key for the config's provider (None: the server-side key)."""
     from sia_devtools.errors import ValidationError
 
-    from . import config, models
+    from . import config, memory, models
     p = dev.project(org, pid)
     if p["settings"]["kind"] != "agent":
         raise ValidationError("Tasks run only on hosted agents (projects with settings.kind = 'agent').")
@@ -191,12 +194,16 @@ def perform(dev, org, pid, task, *, key=None, revise=True, tags=(), run_id=None)
         raise ValidationError("This agent has no active agent_config version yet.")
     cfg = config.parse(active["content"])
     llm = models.for_config(cfg, key)
-    result = run_task(cfg, task, context_for(dev, org, pid, cfg, llm, revise=revise))
+    ctx = context_for(dev, org, pid, cfg, llm, revise=revise)
+    result = run_task(cfg, task, ctx)
     record(dev, org, pid, task, result, active["version"], tags=tags, run_id=rid)
+    new = memory.reflect(dev, org, pid, llm, task, result.draft, result.answer, result.critique, result.attempts,
+                         ctx.domain) if learn and revise else []
     return {"run_id": rid, "answer": result.answer, "version": active["version"], "checks": result.checks,
             "attempts": result.attempts, "self_critique": result.self_critique, "critique": result.critique,
             "tools_used": [s["tool"] for s in result.transcript], "sources": result.sources,
-            "llm_calls": result.calls, **({"error": result.error} if result.error else {})}
+            "lessons_used": [ctx.lessons[i] for i in cfg["lessons"] if i in ctx.lessons], "new_lessons": new,
+            "llm_calls": llm.calls, **({"error": result.error} if result.error else {})}
 def context_for(dev, org, pid, cfg, llm, revise=True):
     """The actor context for a project: its lessons, exemplars, documents and tables, all scoped to it."""
     p = dev.project(org, pid)

@@ -73,7 +73,7 @@ def test_migration_maps_every_table_and_is_idempotent(tmp_path):
     p = dev.project(ORG, AGENT)  # same id as the agent
     assert p["settings"]["kind"] == "agent" and p["name"] == "indian-income-tax"
     assert dev.project(ORG, "b" * 32)["name"] == "agent-bbbbbbbb"  # the domain slug was taken
-    assert p["settings"]["agent"] == {"domain": "Indian income tax", "instructions": "Be precise.",
+    assert p["settings"]["agent"] == {"name": "tax", "domain": "Indian income tax", "instructions": "Be precise.",
                                       "rubric": "Cite the section."}
 
     active = dev.active_version(ORG, AGENT, config.CONFIG_NAME)

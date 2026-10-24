@@ -110,10 +110,91 @@ def cancel(dev, org, jid):
 
 
 # --- the worker ----------------------------------------------------------------------------------------------------
+def org_of(dev, pid):
+    with dev._conn() as c:
+        row = c.execute("SELECT org_id FROM projects WHERE id=?", (pid,)).fetchone()
+    if not row:
+        raise NotFound("Project not found.")
+    return row[0]
+
+
+def _metered(dev, org, pid):
+    """A budget for one job (the project's per-cycle cap, and the month's quota) and a meter for what it spent."""
+    from . import budget
+    cap = dev.project(org, pid)["settings"]["loop"]["max_calls_per_cycle"]
+    left = budget.quota_left(dev.path, org)
+    return budget.Budget(min(cap, left) if left is not None else cap), \
+        lambda action, n: n and budget.record_usage(dev.path, org, pid, action, n)
+
+
+def _cycle(dev, job):
+    from . import budget, cycle
+    pid = job["project_id"]
+    org = org_of(dev, pid)
+    return cycle.run_cycle(dev, org, pid, payload=job["payload"], quota=lambda o: budget.quota_left(dev.path, o),
+                           on_usage=lambda n: budget.record_usage(dev.path, org, pid, "loop", n))
+
+
+def _evaluate(dev, job):
+    """payload: {"version": N (default: active), "split": "dev"|"holdout"|None, "dataset": "eval", "trials": 1}"""
+    from . import config, models
+    from .evaluator import Evaluator
+    pid, p = job["project_id"], job["payload"]
+    org = org_of(dev, pid)
+    version = p.get("version") or (dev.active_version(org, pid, config.CONFIG_NAME) or {}).get("version")
+    if not version:
+        raise ValidationError("no agent_config version to evaluate")
+    ds = dev.datasets(org, pid, p.get("dataset", "eval"))
+    if not ds:
+        raise NotFound(f"No dataset named {p.get('dataset', 'eval')!r}.")
+    bud, meter = _metered(dev, org, pid)
+    try:
+        ev, _ = Evaluator(dev, org, pid, llm_for=lambda cfg: bud.wrap(models.for_config(cfg))).evaluate(
+            version, ds[0]["id"], p.get("split"), int(p.get("trials", 1)), "job:evaluate")
+    finally:
+        meter("evaluate", bud.used)
+    return {"evaluation_id": ev["id"], "version": version, "split": p.get("split"), "score": ev["summary"]["score"],
+            "n": ev["summary"]["n"], "llm_calls": bud.used}
+
+
+def _study(dev, job):
+    """Self-study on the project's documents: the model writes practice questions with answers from the source. They
+    are stored as *pending* examples in the dev split: the agent never writes its own exam (G9, G2)."""
+    from . import config, models
+    pid = job["project_id"]
+    org = org_of(dev, pid)
+    p = dev.project(org, pid)
+    domain = (p["settings"]["agent"] or {}).get("domain") or "this domain"
+    chunks = dev.random_knowledge(org, pid, max(1, min(int(job["payload"].get("rounds", 3)), 20)))
+    if not chunks:
+        raise ValidationError("No knowledge to study. Add documents first.")
+    active = dev.active_version(org, pid, config.CONFIG_NAME)
+    if not active:
+        raise ValidationError("This agent has no active agent_config yet.")
+    bud, meter = _metered(dev, org, pid)
+    llm, items = bud.wrap(models.for_config(config.parse(active["content"]))), []
+    try:
+        for ch in chunks:
+            qa = llm.json(f"You write exam questions for practitioners of {domain}.",
+                          f"SOURCE ({ch['title']}):\n{ch['text']}\n\nWrite one realistic task or question a user in "
+                          "this domain might ask that this source answers, plus the ideal answer based strictly on the "
+                          'source. Return {"question": "...", "answer": "..."}', temperature=0.8)
+            q, a = (str(qa.get(k, "")).strip() for k in ("question", "answer")) if isinstance(qa, dict) else ("", "")
+            if q and a:
+                items.append({"input": q[:20000], "expected_output": a[:20000], "metadata": {"from": ch["title"]}})
+    finally:
+        meter("study", bud.used)
+    if not items:
+        return {"studied": 0, "example_ids": [], "llm_calls": bud.used}
+    ds = dev.create_dataset(org, pid, "eval", actor="sia-loop")
+    ids = dev.add_examples(org, pid, ds["id"], items, status="pending", split="dev", source="synthetic")["ids"]
+    return {"studied": len(ids), "example_ids": ids, "llm_calls": bud.used}
+
+
 def default_handlers():
     """Job kind -> fn(dev, job) -> result dict. A result with "_status" finishes the job with that status (for
     example skipped_budget)."""
-    return {"noop": lambda dev, job: {"ok": True}}
+    return {"noop": lambda dev, job: {"ok": True}, "cycle": _cycle, "evaluate": _evaluate, "study": _study}
 
 
 def run_one(dev, worker, handlers):

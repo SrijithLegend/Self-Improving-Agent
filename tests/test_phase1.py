@@ -65,14 +65,14 @@ def test_stale_heartbeat_requeues_then_fails(sia):
 def test_worker_runs_jobs_records_failures_and_respects_cancel(sia):
     dev, pid = sia._store, sia.project_id
     ok = jobs.enqueue(dev, LOCAL_ORG, pid, "noop")
-    boom = jobs.enqueue(dev, LOCAL_ORG, pid, "study")  # no handler for it in phase 1
+    boom = jobs.enqueue(dev, LOCAL_ORG, pid, "study")  # no handler for it below
     later = jobs.enqueue(dev, LOCAL_ORG, pid, "noop", run_after=time.time() + 3600)
     gone = jobs.enqueue(dev, LOCAL_ORG, pid, "noop")
     jobs.cancel(dev, LOCAL_ORG, gone["id"])
     with pytest.raises(Conflict):
         jobs.cancel(dev, LOCAL_ORG, gone["id"])
     budget = {"noop": lambda d, j: {"_status": "skipped_budget", "estimate": 9}}
-    assert jobs.work(dev, {**jobs.default_handlers(), **budget}, once=True) == 2
+    assert jobs.work(dev, budget, once=True) == 2
     got = {j["id"]: j for j in jobs.jobs(dev, LOCAL_ORG, pid)}
     assert got[ok["id"]]["status"] == "skipped_budget" and got[ok["id"]]["result"] == {"estimate": 9}
     assert got[boom["id"]]["status"] == "failed" and "no handler" in got[boom["id"]]["error"]
