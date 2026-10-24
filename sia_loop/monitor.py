@@ -11,7 +11,7 @@ re-activates the previous version.
 import math
 import time
 
-from . import jobs
+from . import jobs, notify
 
 ACTOR = "sia-loop"
 Z_MAX, MIN_RATINGS, WATCH_HOURS, EVERY = 2.0, 30, 48, 600
@@ -61,10 +61,12 @@ def check(dev, org, pid, now=None):
             dev.stop_canary(org, pid, name, reason, actor=ACTOR)
             dev.revoke(org, pid, name, v, reason, actor=ACTOR)
             actions.append({**entry, "action": "rolled_back", "reason": reason})
+            notify.emit(dev, org, pid, "canary.rolled_back", {**entry, "reason": reason})
         elif now - c["started"] >= loop["canary_min_hours"] * 3600:
             if loop["autonomy"] >= 3:
                 dev.promote_canary(org, pid, name, actor=ACTOR)
                 actions.append({**entry, "action": "promoted"})
+                notify.emit(dev, org, pid, "canary.promoted", entry)
             else:
                 if not any(a["action"] == "canary.ready" and (a["detail"] or {}).get("version") == v
                            for a in dev.audit(org, pid, 200)):
@@ -100,6 +102,7 @@ def _watch(dev, org, pid, loop, now):
             dev.revoke(org, pid, name, new_v, reason, actor=ACTOR)
             out.append({"name": name, "action": "rolled_back_after_promotion", "version": new_v, "to": prev,
                         "reason": reason})
+            notify.emit(dev, org, pid, "canary.rolled_back", out[-1])
     return out
 
 

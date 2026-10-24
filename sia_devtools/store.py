@@ -258,6 +258,9 @@ ALTER TABLE active_versions ADD COLUMN canary_version INTEGER;
 ALTER TABLE active_versions ADD COLUMN canary_pct INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE active_versions ADD COLUMN canary_started REAL
 """))
+MIGRATIONS.append(("devtools-006-webhooks", """
+CREATE TABLE IF NOT EXISTS webhooks (project_id TEXT PRIMARY KEY, secret TEXT NOT NULL, created REAL)
+"""))
 LESSON_STATES = ("probation", "pinned", "retired")
 MAX_CANARY_PCT = 50
 
@@ -533,7 +536,7 @@ class DevStore:
 
     # every table keyed by project_id; dataset_examples hang off datasets
     PROJECT_TABLES = ("runs", "feedback", "evaluations", "eval_results", "comparisons", "versions", "active_versions",
-                      "audit", "jobs", "lessons", "knowledge_docs", "knowledge", "lookup_tables")
+                      "audit", "jobs", "lessons", "knowledge_docs", "knowledge", "lookup_tables", "webhooks")
 
     @classmethod
     def purge_project(cls, c, pid):

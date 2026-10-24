@@ -89,5 +89,8 @@ def decide(dev, org, pid, version, cmp_holdout, cmp_dev=None, payload=None, acto
         return {"status": "approved", "outcome": "approved", "reason": str(e), "rules": report,
                 "comparison_id": cmp_holdout["id"]}
     jobs.enqueue(dev, org, pid, "monitor", run_after=time.time() + monitor.EVERY, unique="queued")
+    from . import notify
+    notify.emit(dev, org, pid, "version.auto_approved", {"version": version, "comparison_id": cmp_holdout["id"]})
+    notify.emit(dev, org, pid, "canary.started", canary)
     return {"status": "approved", "outcome": "canary_started", "canary": canary, "rules": report,
             "comparison_id": cmp_holdout["id"]}

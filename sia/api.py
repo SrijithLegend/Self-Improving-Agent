@@ -993,8 +993,24 @@ def delete_table(project_id: str, name: str, t=Depends(tenant)):
 # --- the self-improving loop -----------------------------------------------------------
 @app.get("/v1/projects/{project_id}/loop")
 def get_loop(project_id: str, t=Depends(tenant)):
+    """The loop's settings plus what the dashboard shows: running canaries, the next scheduled cycle, this month's
+    model calls against the plan, and a summary of the active agent_config."""
+    from sia_loop import config
     p = dev.project(t["id"], project_id)
-    return {**p["settings"]["loop"], "kind": p["settings"]["kind"], "canaries": dev.canaries(t["id"], project_id)}
+    loop, kind = p["settings"]["loop"], p["settings"]["kind"]
+    cycles = [j for j in jobs.jobs(dev, t["id"], project_id, 50, kind="cycle") if j["status"] != "cancelled"]
+    nxt = None
+    if kind == "agent" and loop["autonomy"] >= 1 and not loop["paused"]:
+        nxt = (cycles[0]["created"] if cycles else time.time()) + jobs.interval_hours(loop["every_hours"], cycles) * 3600
+    lim = limits(t)
+    active = dev.active_version(t["id"], project_id, config.CONFIG_NAME)
+    cfg = config.parse(active["content"]) if active else None
+    return {**loop, "kind": kind, "canaries": dev.canaries(t["id"], project_id), "next_cycle": nxt,
+            "budget": {"llm_calls_this_month": store.llm_calls_since(t["id"], month_start()),
+                       "quota": lim["llm_calls_per_month"] if lim else None},
+            "config": cfg and {"version": active["version"], "lessons": cfg["lessons"], "exemplars": cfg["exemplars"],
+                               "macros": cfg["tools"]["macros"], "tools": cfg["tools"]["enabled"],
+                               "validators": cfg["validators"], "model": cfg["model"]}}
 
 
 @app.post("/v1/projects/{project_id}/loop/pause")
@@ -1002,7 +1018,18 @@ def pause_loop(project_id: str, t=Depends(tenant)):
     """The kill switch: no more autonomous changes. Every canary stops, queued loop jobs are cancelled, and the
     active versions stay exactly as they are."""
     dev.update_project(t["id"], project_id, {"loop": {"paused": True}}, actor=actor(t))
+    from sia_loop import notify
+    notify.emit(dev, t["id"], project_id, "loop.paused", {"by": actor(t)})
     return get_loop(project_id, t)
+
+
+@app.get("/v1/projects/{project_id}/loop/webhook")
+def webhook_secret(project_id: str, rotate: bool = False, t=Depends(tenant)):
+    """The secret that signs this project's webhook deliveries (X-SIA-Signature). rotate=true issues a new one."""
+    from sia_loop import notify
+    return {"url": dev.project(t["id"], project_id)["settings"]["loop"]["webhook_url"],
+            "secret": notify.secret(dev, t["id"], project_id, rotate=rotate),
+            "signature": "X-SIA-Signature: sha256=HMAC_SHA256(secret, X-SIA-Timestamp + '.' + body)"}
 
 
 @app.post("/v1/projects/{project_id}/loop/resume")
@@ -1150,6 +1177,19 @@ def approve_version(project_id: str, name: str, version: int, body: ApproveIn, t
 @app.post("/v1/projects/{project_id}/versions/{name}/{version}/reject")
 def reject_version(project_id: str, name: str, version: int, body: RejectIn, t=Depends(tenant)):
     return dev.reject(t["id"], project_id, name, version, body.reason, actor(t, body.reviewer))
+
+
+@app.get("/v1/projects/{project_id}/versions/{name}/{version}/diff")
+def version_diff(project_id: str, name: str, version: int, t=Depends(tenant)):
+    """For agent_config: readable changes from its parent and from the active version (config.diff)."""
+    from sia_loop import config
+    if name != config.CONFIG_NAME:
+        raise HTTPException(400, "Readable diffs are for agent_config versions; prompts diff line by line.")
+    v = dev.version(t["id"], project_id, name, version)
+    active = dev.active_version(t["id"], project_id, name)
+    parent = dev.version(t["id"], project_id, name, v["parent_version"]) if v["parent_version"] else None
+    return {"from_parent": config.diff(parent["content"], v["content"]) if parent else None,
+            "from_active": config.diff(active["content"], v["content"]) if active else None}
 
 
 @app.post("/v1/projects/{project_id}/versions/{name}/{version}/canary")

@@ -150,10 +150,92 @@ def cmd_improve(a):
     cev = _evaluate(c, a, version=cand["version"], label="improve:candidate")
     cmp = c.compare(base, cev)
     say(summary_line("candidate", cev), *comparison_lines(cmp), "",
-        "Nothing was approved or activated. Next:",
+        "Nothing was approved or activated. (`sia loop run` tries several candidates and decides on held-out cases.)",
+        "Next:",
         f"  sia versions approve {cand['version']} --comparison {cmp['id']}" if cmp["verdict"] == "improved" else
         f"  sia versions reject {cand['version']} --reason \"{cmp['verdict']}\"   (or approve with --override)")
     write_json(a.json, {"candidate": cand, "comparison": cmp})
+    return 0
+
+
+def _loop_llm(a):
+    from sia.llm import LLM
+    return LLM(a.provider, os.getenv("SIA_LLM_KEY") or os.getenv("GENAI_API_KEY") or "", a.model)
+
+
+def cmd_loop(a):
+    c = client(a)
+    if a.action == "run":
+        if c.project_settings()["kind"] == "agent":
+            if c.mode == "hosted":
+                j = c._http.request("POST", c._p("/loop/run"), {"dataset": a.dataset or "eval"})
+                say(f"cycle queued: job {j['job_id']} (the server's `sia worker` runs it; see `sia loop history`)")
+                return 0
+            from sia_loop import cycle, jobs
+            j = jobs.enqueue(c._store, "local", c.project_id, "cycle", {"dataset": a.dataset or "eval",
+                                                                         "trigger": "manual"}, unique=True)
+            done = jobs.run_one(c._store, "cli", jobs.default_handlers())
+            rec = (done or j)["result"] or {}
+            say(cycle.summary(rec) if rec.get("outcome") else f"job {j['id']}: {(done or j)['status']} "
+                f"{(done or j).get('error') or ''}")
+            write_json(a.json, rec)
+            return 0
+        if not a.target:
+            raise SIAError("for your own app (kind 'app'), pass --target module:function, called as f(input, prompt)")
+        from sia_loop import app_cycle
+        rec = app_cycle.run(c, load(a.target), scorers(a.scorer), _loop_llm(a), dataset=a.dataset or "eval",
+                            name=a.name, log=say)
+        say(f"cycle: {rec['outcome']}")
+        write_json(a.json, rec)
+        return 0
+    if a.action in ("pause", "resume"):
+        s = c.update_settings(loop={"paused": a.action == "pause"})
+        say(f"loop {'paused: canaries stopped, nothing new is queued' if s['loop']['paused'] else 'resumed'}")
+        return 0
+    if a.action == "history":
+        if c.mode == "hosted":
+            rows = c._http.request("GET", c._p("/loop/history"))
+        else:
+            from sia_loop import jobs
+            rows = [{"job_id": j["id"], "status": j["status"], "created": j["created"], **(j["result"] or {})}
+                    for j in jobs.jobs(c._store, "local", c.project_id, 50, kind="cycle")]
+        for r in rows:
+            h = r.get("holdout") or {}
+            say(f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(r['created']))}  {r['status']:<14} "
+                f"{r.get('outcome') or '':<20} calls {r.get('calls') or 0:<5}"
+                + (f" holdout {h['baseline']:.3f}->{h['candidate']:.3f}" if h else ""))
+        say(f"{len(rows)} cycle(s)")
+        return 0
+    s = c.project_settings()
+    loop = s["loop"]
+    say(f"project {c.project} (kind {s['kind']})", f"  autonomy   {loop['autonomy']}{'  PAUSED' if loop['paused'] else ''}",
+        f"  schedule   every {loop['every_hours']} h, or after {loop['new_examples_trigger']} new verified examples",
+        f"  budget     {loop['max_calls_per_cycle']} LLM calls per cycle; holdout {loop['holdout_pct']}% "
+        f"(promotion needs {loop['holdout_min_examples']})")
+    canaries = {x["name"]: x for x in c._do(lambda: {"canaries": c._store.canaries("local", c.project_id)}, "GET",
+                                             c._p("/loop"))["canaries"]}
+    for name in ("system_prompt", "agent_config"):
+        v, canary = c.active_version(name), canaries.get(name)
+        if v:
+            say(f"  {name:<13} active @{v['version']}" + (f", canary @{canary['version']} at {canary['pct']}%"
+                                                          if canary else ""))
+    return 0
+
+
+def cmd_canary(a):
+    c = client(a)
+    if a.action == "start":
+        if a.version is None:
+            raise SIAError("canary start needs a version number")
+        r = c.start_canary(a.version, a.pct, name=a.name, reviewer=a.reviewer)
+        say(f"{a.name}@{r['version']} serves {r['pct']}% of units (get_prompt(unit=...)); the rest stay on the active "
+            "version")
+    elif a.action == "promote":
+        r = c.promote_canary(name=a.name, reviewer=a.reviewer)
+        say(f"{a.name}@{r['version']} is now active for everyone")
+    else:
+        r = c.stop_canary(name=a.name, reason=a.reason, reviewer=a.reviewer)
+        say(f"canary {a.name}@{r['version']} stopped; everyone is on the active version")
     return 0
 
 
@@ -233,7 +315,8 @@ def cmd_worker(a):
     if not a.once:
         print(f"SIA worker on {a.db} ({a.concurrency} thread(s)); Ctrl+C to stop")
     try:
-        n = jobs.work(dev, jobs.default_handlers(), once=a.once, concurrency=a.concurrency)
+        n = jobs.work(dev, jobs.default_handlers(), once=a.once, concurrency=a.concurrency,
+                      tick=None if a.no_schedule else jobs.tick)
     except KeyboardInterrupt:
         return 0
     say(f"ran {n} job(s)")
@@ -393,7 +476,26 @@ def parser():
     w.add_argument("--db", default=os.getenv("SIA_DB") or os.getenv("SIA_LOCAL_DB") or "sia.db")
     w.add_argument("--once", action="store_true", help="run the jobs that are due, then exit")
     w.add_argument("--concurrency", type=int, default=1)
+    w.add_argument("--no-schedule", action="store_true", help="run queued jobs only; don't queue scheduled cycles")
     w.set_defaults(fn=cmd_worker)
+
+    lp = sub.add_parser("loop", parents=[common], help="the self-improving loop: run a cycle, status, pause, history")
+    lp.add_argument("action", choices=["run", "status", "pause", "resume", "history"])
+    lp.add_argument("--target", help="run, kind 'app': module:function called as f(input, prompt)")
+    lp.add_argument("--dataset", help="default: eval")
+    lp.add_argument("--scorer", action="append")
+    lp.add_argument("--provider", default="gemini")
+    lp.add_argument("--model", default=None)
+    lp.add_argument("--json")
+    lp.set_defaults(fn=cmd_loop)
+
+    cn = sub.add_parser("canary", parents=[common], help="serve an approved version to a share of traffic")
+    cn.add_argument("action", choices=["start", "promote", "stop"])
+    cn.add_argument("version", type=int, nargs="?")
+    cn.add_argument("--pct", type=int, default=10)
+    cn.add_argument("--reason")
+    cn.add_argument("--reviewer")
+    cn.set_defaults(fn=cmd_canary)
 
     t = sub.add_parser("create-tenant", aliases=["create-org"], help="create an organization and print its key")
     t.add_argument("org_name")

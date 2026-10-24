@@ -15,7 +15,7 @@ import uuid
 from sia_devtools.errors import Conflict, NotFound, ValidationError
 from sia_devtools.store import load
 
-KINDS = ("cycle", "monitor", "evaluate", "study", "noop")
+KINDS = ("cycle", "monitor", "evaluate", "study", "notify", "noop")
 STATUSES = ("queued", "running", "done", "failed", "skipped_budget", "cancelled")
 STALE_AFTER, HEARTBEAT_EVERY, MAX_ATTEMPTS = 300, 30, 3
 
@@ -116,6 +116,83 @@ def cancel(dev, org, jid):
     return get(dev, org, jid)
 
 
+# --- triggers (spec §9.2) ------------------------------------------------------------------------------------------
+PROMOTED = ("canary_started", "activated", "approved")
+EMPTY_CYCLES, MAX_HOURS, TICK_EVERY = 3, 168, 60
+_last_tick = [0.0]
+
+
+def interval_hours(every_hours, cycles):
+    """The schedule with back-off: after 3 cycles in a row with no promotion, every_hours doubles for each further
+    one (capped at 7 days). A promotion, or a cycle that new data triggered, starts the count again.
+    cycles: the project's finished cycle jobs, newest first."""
+    empty = 0
+    for j in cycles:
+        if (j["result"] or {}).get("outcome") in PROMOTED or (j["payload"] or {}).get("trigger") in (
+                "new_examples", "failure_rise"):
+            break
+        empty += 1
+    return min(every_hours * 2 ** max(0, empty - EMPTY_CYCLES + 1), MAX_HOURS) if empty >= EMPTY_CYCLES \
+        else every_hours
+
+
+def _failure_rise(dev, org, pid, now):
+    """z of the validator-and-outcome failure rate in the last 24 h against the 7 days before (needs 100 runs)."""
+    from .monitor import z_worse
+    rows = {}
+    with dev._conn() as c:
+        for label, lo, hi in (("recent", now - 86400, now), ("before", now - 8 * 86400, now - 86400)):
+            r = c.execute("""SELECT COUNT(*) n, COALESCE(SUM(EXISTS(SELECT 1 FROM json_each(r.scores) WHERE
+                (key LIKE 'validator:%' OR key='outcome') AND value=0)), 0) bad FROM runs r WHERE r.project_id=? AND
+                r.parent_id IS NULL AND r.started>=? AND r.started<? AND NOT EXISTS (SELECT 1 FROM
+                json_each(r.tags) WHERE value='eval')""", (pid, lo, hi)).fetchone()
+            rows[label] = (r["bad"], r["n"])
+    (bad, n), (bad0, n0) = rows["recent"], rows["before"]
+    return z_worse(bad0, n0, bad, n) if n >= 100 else 0.0
+
+
+def due(dev, org, pid, now=None):
+    """Why a cycle should be queued now (a trigger name), or None."""
+    now = now or time.time()
+    p = dev.project(org, pid)
+    loop = p["settings"]["loop"]
+    if p["settings"]["kind"] != "agent" or loop["autonomy"] < 1 or loop["paused"]:
+        return None
+    cycles = jobs(dev, org, pid, 50, kind="cycle")
+    if any(j["status"] in ("queued", "running") for j in cycles):
+        return None
+    done = [j for j in cycles if j["status"] not in ("cancelled",)]
+    last = done[0]["created"] if done else 0
+    with dev._conn() as c:
+        new = c.execute("""SELECT COUNT(*) FROM dataset_examples e JOIN datasets d ON d.id=e.dataset_id WHERE
+            d.project_id=? AND e.status='verified' AND e.created>?""", (pid, last)).fetchone()[0]
+    if last and new >= loop["new_examples_trigger"]:
+        return "new_examples"
+    if _failure_rise(dev, org, pid, now) > 2.0:
+        return "failure_rise"
+    if now - last >= interval_hours(loop["every_hours"], done) * 3600:
+        return "schedule"
+    return None
+
+
+def tick(dev, now=None, force=False):
+    """Queue cycles that are due, for every hosted agent in the database. Runs at most once a minute."""
+    now = now or time.time()
+    if not force and now - _last_tick[0] < TICK_EVERY:
+        return []
+    _last_tick[0] = now
+    with dev._conn() as c:
+        projects = c.execute("SELECT id, org_id FROM projects").fetchall()
+    queued = []
+    for pid, org in projects:
+        try:
+            if reason := due(dev, org, pid, now):
+                queued.append(enqueue(dev, org, pid, "cycle", {"trigger": reason}, unique=True))
+        except Exception:  # noqa: BLE001 - one broken project must not stop the others' schedules
+            continue
+    return queued
+
+
 # --- the worker ----------------------------------------------------------------------------------------------------
 def org_of(dev, pid):
     with dev._conn() as c:
@@ -201,9 +278,9 @@ def _study(dev, job):
 def default_handlers():
     """Job kind -> fn(dev, job) -> result dict. A result with "_status" finishes the job with that status (for
     example skipped_budget)."""
-    from . import monitor
+    from . import monitor, notify
     return {"noop": lambda dev, job: {"ok": True}, "cycle": _cycle, "evaluate": _evaluate, "study": _study,
-            "monitor": monitor.handler}
+            "monitor": monitor.handler, "notify": notify.deliver}
 
 
 def run_one(dev, worker, handlers):

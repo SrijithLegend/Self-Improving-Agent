@@ -17,7 +17,7 @@ import time
 from sia_devtools.errors import NotFound, ValidationError
 
 from . import budget as budgets
-from . import config, memory, models, optimizer
+from . import config, memory, models, notify, optimizer
 from .evaluator import Evaluator
 
 ACTOR = "sia-loop"
@@ -144,6 +144,7 @@ def run_cycle(dev, org, pid, *, payload=None, llm_for=None, judge_llm=None, quot
                                    parent_version=active["version"], note=f"{name}: " + "; ".join(diff),
                                    actor=ACTOR)["version"]
             cands[v] = {"version": v, "operator": name, "diff": diff, "status": "candidate", "cfg": cand}
+            notify.emit(dev, org, pid, "candidate.created", {"version": v, "operator": name, "diff": diff})
         say("candidates", versions=list(cands))
         if not cands:
             record.update(outcome="no_candidates")
@@ -208,12 +209,22 @@ def run_cycle(dev, org, pid, *, payload=None, llm_for=None, judge_llm=None, quot
         say("budget_exhausted", used=bud.used)
         record.update(outcome="budget_exhausted")
         return record
+    except Exception as e:  # a model outage or a bug: nothing half-measured may be decided on
+        reject_all(f"cycle stopped before a decision: {type(e).__name__}: {str(e)[:200]}")
+        say("failed", error=f"{type(e).__name__}: {str(e)[:300]}")
+        record.update(outcome="failed")
+        raise
     finally:
         record["calls"] = bud.used
         record["candidates"] = [*record["candidates"], *({k: v for k, v in c.items() if k != "cfg"}
                                                          for c in cands.values())]
         if on_usage and bud.used:
             on_usage(bud.used)
+        for c in cands.values():
+            if c.get("status") == "rejected":
+                notify.emit(dev, org, pid, "candidate.rejected", {"version": c["version"], "reason": c.get("reason")})
+        if record.get("outcome") == "budget_exhausted":
+            notify.emit(dev, org, pid, "budget.exhausted", {"calls": bud.used, "cap": bud.cap})
         dev._audit_now(pid, ACTOR, "loop.cycle", {"outcome": record.get("outcome"), "calls": bud.used,
                                                   "candidates": list(cands), "best": record.get("best")})
 

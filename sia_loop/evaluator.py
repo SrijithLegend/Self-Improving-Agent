@@ -10,7 +10,6 @@ import time
 import uuid
 from statistics import mean
 
-from sia.llm import LLMError
 from sia_devtools.errors import ValidationError
 from sia_devtools.scoring import BUILTIN, llm_judge, primary_score, regex
 from sia_devtools.store import regex_problem
@@ -80,10 +79,9 @@ class Evaluator:
             per, errors, took, last = {s.name: [] for s in scorers}, [], [], None
             for _ in range(trials):
                 t0 = time.perf_counter()
-                try:
-                    last, err = actor.run_task(cfg, ex["input"], ctx).answer, None
-                except LLMError as e:
-                    last, err = None, f"LLMError: {e}"[:500]
+                # a provider failure (rate limit, quota, outage) is not the config's failure: scoring it 0 would let
+                # an outage decide a release, so the evaluation stops instead (LLMError propagates)
+                last, err = actor.run_task(cfg, ex["input"], ctx).answer, None
                 took.append((time.perf_counter() - t0) * 1000)
                 for s in scorers:
                     if err:

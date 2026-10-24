@@ -312,7 +312,7 @@ function logout() { S.key = ""; S.me = null; try { sessionStorage.removeItem("si
 const LOGO = '<svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><path d="M26 16a10 10 0 1 1-3-7.1" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/><path d="M23.5 3.5v6h-6" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="16" cy="16" r="3.2" fill="var(--signal)"/></svg>';
 const BRAND = `<a class="brand" href="/" title="SIA home">${LOGO}<b>sia</b><small>DevTools</small></a>`;
 const NAV = [["Observe", [["overview", "Overview"], ["runs", "Runs"]]],
-             ["Improve", [["datasets", "Datasets"], ["evals", "Evaluations"], ["lab", "Improvement lab"]]],
+             ["Improve", [["datasets", "Datasets"], ["evals", "Evaluations"], ["lab", "Improvement lab"], ["loop", "Self-improving loop"]]],
              ["Account", [["project", "Project & keys"], ["usage", "Usage"], ["billing", "Plans & billing"]]]];
 
 function shell(view, body) {
@@ -606,6 +606,42 @@ function diff(a, b) {
   return out;
 }
 
+const AUTONOMY = ["0 · Manual: a person runs every step", "1 · Propose: the loop drafts candidates, a person decides",
+                  "2 · Canary: the loop approves holdout winners into a canary, a person promotes",
+                  "3 · Autonomous: canary, then everyone if live traffic agrees"];
+V.loop = async () => {
+  const [l, hist, lessons] = await Promise.all([api(P() + "/loop"), api(P() + "/loop/history?limit=30"), api(P() + "/lessons")]);
+  const by = (st) => lessons.filter((x) => x.state === st);
+  const b = l.budget, cfg = l.config;
+  const lessonRows = (rows) => rows.length ? `<div class="tbl"><table>${rows.map((x) => `<tr><td>#${x.id}</td><td>${esc(x.text)}</td>
+    <td class="muted">${esc(x.source)}</td><td>${x.state === "retired" ? `<button data-act="lesson" data-id="${x.id}" data-to="probation">Restore</button>`
+    : `<button class="danger" data-act="lesson" data-id="${x.id}" data-to="retire">Veto</button>`}</td></tr>`).join("")}</table></div>` : `<p class="muted">None.</p>`;
+  return `<h1>Self-improving loop</h1><p class="sub">The loop proposes changes from failures on practice cases, keeps one only if it wins on held-out cases, and lets live traffic have the final say. Every step is in the audit log as <code>sia-loop</code>.</p>
+  <div class="card" data-panel="loop"><h2 style="margin-top:0">Loop ${l.paused ? pill("paused", "bad") : pill("running", "good")}</h2>
+    <form data-form="autonomy" class="row"><label for="aut" class="sr">Autonomy</label><select id="aut" name="autonomy">${AUTONOMY.map((t, i) => `<option value="${i}" ${i === l.autonomy ? "selected" : ""}>${esc(t)}</option>`).join("")}</select><button>Set autonomy</button></form>
+    <div class="grid" style="margin-top:12px">
+      <div class="stat"><div class="k">Model calls this month</div><div class="v">${int(b.llm_calls_this_month)}</div><div class="n">${b.quota == null ? "no plan limit" : "of " + int(b.quota)}</div></div>
+      <div class="stat"><div class="k">Next scheduled cycle</div><div class="v">${l.next_cycle ? when(l.next_cycle) : "–"}</div><div class="n">${l.kind === "agent" ? `every ${l.every_hours} h, backing off after empty cycles` : "your app: run <code>sia loop run --target</code>"}</div></div>
+      <div class="stat"><div class="k">Per-cycle budget</div><div class="v">${int(l.max_calls_per_cycle)}</div><div class="n">LLM calls; holdout ${l.holdout_pct}%</div></div></div>
+    <div class="row" style="margin-top:12px">${l.paused ? `<button class="primary" data-act="loopstate" data-to="resume">Resume</button>`
+      : `<button class="danger" data-act="loopstate" data-to="pause">Pause the loop</button>`}${l.kind === "agent" ? `<button data-act="runloop">Run a cycle now</button>` : ""}</div>
+    ${l.canaries.length ? `<p>${l.canaries.map((c) => `Canary: ${esc(c.name)}@${c.version} serves ${c.pct}% next to @${c.active}, since ${ago(c.started)}`).join("<br>")}</p>` : ""}</div>
+  <h2>Cycles</h2><div class="card tbl">${hist.length ? `<table><tr><th>When</th><th>Outcome</th><th>Tried</th><th>Winner</th><th>Holdout</th><th class="num">Calls</th></tr>
+    ${hist.map((h) => { const c = (h.candidates || []).filter((x) => x.version); const w = c.find((x) => x.version === h.best);
+      return `<tr><td class="muted">${ago(h.created)}</td><td>${pill(h.outcome || h.status, ["canary_started", "activated"].includes(h.outcome) ? "good" : h.status === "failed" ? "bad" : "")}</td>
+      <td class="muted">${esc(c.map((x) => x.operator).join(", ") || "–")}</td><td>${w ? `<a href="#/lab/agent_config/${w.version}">@${w.version}</a> <span class="muted">${esc((w.diff || []).join("; "))}</span>` : "–"}</td>
+      <td>${h.holdout ? `${num(h.holdout.baseline)} → ${num(h.holdout.candidate)} ${pill(h.holdout.verdict)}` : "–"}</td><td class="num">${int(h.calls)}</td></tr>`; }).join("")}</table>`
+    : `<div class="empty" style="margin:12px">No cycles yet.</div>`}</div>
+  <h2>Memory</h2><div class="split"><div class="card"><h2 style="margin-top:0">Pinned lessons <span class="muted">(in production via @${cfg ? cfg.version : "–"})</span></h2>${lessonRows(by("pinned"))}
+    <h2>In probation <span class="muted">(never in a prompt until a promoted config pins them)</span></h2>${lessonRows(by("probation"))}
+    <h2>Retired</h2>${lessonRows(by("retired"))}</div>
+  <div class="card"><h2 style="margin-top:0">Active config</h2>${cfg ? `<p>Model ${esc(cfg.model.chain.join(", "))} · tools ${esc(cfg.tools.join(", ") || "none")}</p>
+    <p>Exemplars (dev examples): ${cfg.exemplars.length ? cfg.exemplars.map((e) => "#" + e).join(", ") : "none"}</p>
+    <p>Validators: ${cfg.validators.length ? cfg.validators.map((v) => `<code>${esc(v.name)}</code>`).join(", ") : "none"}</p>
+    <h2>Agent-made tools</h2>${cfg.macros.length ? cfg.macros.map((m) => `<p><b>${esc(m.name)}</b> (${esc(m.kind)}) ${esc(m.description)}</p><pre>${j(m.kind === "prompt" ? { input_schema: m.input_schema, output_schema: m.output_schema } : { steps: m.steps })}</pre>`).join("") : `<p class="muted">None.</p>`}`
+    : `<p class="muted">No agent_config yet (this project improves a prompt; see the Improvement lab).</p>`}</div></div>`;
+};
+
 V.version = async (q, name, num_) => {
   const [v, active, cmps] = await Promise.all([api(`${P()}/versions/${encodeURIComponent(name)}/${num_}`),
     api(`${P()}/versions/active?name=${encodeURIComponent(name)}`), api(P() + "/comparisons?limit=100")]);
@@ -613,8 +649,8 @@ V.version = async (q, name, num_) => {
   const usable = mine.filter((c) => c.project_policy && (active ? c.baseline.version === active.version : true));
   return `<p><a href="#/lab">← Improvement lab</a></p><h1>${esc(name)}@${v.version} ${pill(v.status)} ${v.active ? pill("active", "good") : ""}</h1>
   <p class="sub">${esc(v.note || "")}${v.parent_version != null ? " · based on @" + v.parent_version : ""} · ${when(v.created)}${v.decision_reason ? " · decision: " + esc(v.decision_reason) : ""}</p>
-  <div class="split"><div class="card"><h2 style="margin-top:0">Content</h2><pre>${esc(v.content)}</pre></div>
-  <div class="card"><h2 style="margin-top:0">${active && !v.active ? `Change vs active @${active.version}` : "Change"}</h2>${active && !v.active ? `<pre class="diff">${diff(active.content, v.content)}</pre>` : `<p class="muted">This is the active version.</p>`}</div></div>
+  ${name === "agent_config" ? await configDiff(name, v) : `<div class="split"><div class="card"><h2 style="margin-top:0">Content</h2><pre>${esc(v.content)}</pre></div>
+  <div class="card"><h2 style="margin-top:0">${active && !v.active ? `Change vs active @${active.version}` : "Change"}</h2>${active && !v.active ? `<pre class="diff">${diff(active.content, v.content)}</pre>` : `<p class="muted">This is the active version.</p>`}</div></div>`}
   <div class="split"><div class="card"><h2 style="margin-top:0">Lessons extracted</h2>${v.lessons.length ? `<ul>${v.lessons.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>` : `<p class="muted">None recorded.</p>`}</div>
   <div class="card"><h2 style="margin-top:0">Failure patterns</h2>${v.patterns.length ? `<ul>${v.patterns.map((p) => `<li>${esc(p.pattern)}${p.count ? ` <span class="muted">×${p.count}</span>` : ""}</li>`).join("")}</ul>` : `<p class="muted">None recorded.</p>`}</div></div>
   <div class="card"><h2 style="margin-top:0">Evidence</h2>${cmpTable(mine)}</div>
@@ -628,6 +664,14 @@ V.version = async (q, name, num_) => {
   ${v.status === "approved" && !v.active ? `<div class="card"><button class="primary" data-act="activate" data-name="${esc(name)}" data-v="${v.version}">${active && active.version > v.version ? "Roll back to" : "Activate"} @${v.version}</button>
     <span class="muted">Production will receive this text from <code>get_prompt()</code> within its cache time.</span></div>` : ""}`;
 };
+
+async function configDiff(name, v) {
+  const d = await api(`${P()}/versions/${encodeURIComponent(name)}/${v.version}/diff`);
+  const list = (xs) => xs ? `<ul>${xs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : `<p class="muted">–</p>`;
+  return `<div class="split"><div class="card"><h2 style="margin-top:0">Changes from @${v.parent_version ?? "–"}</h2>${list(d.from_parent)}</div>
+  <div class="card"><h2 style="margin-top:0">${v.active ? "This is the active version" : "Changes from the active version"}</h2>${v.active ? "" : list(d.from_active)}</div></div>
+  <details class="card"><summary>Raw config</summary><pre>${j(JSON.parse(v.content))}</pre></details>`;
+}
 
 V.project = async () => {
   const p = await api(P());
@@ -679,7 +723,7 @@ async function route() {
   const q = Object.fromEntries(new URLSearchParams(qs || ""));
   const [view, a, b] = path.split("/").map(decodeURIComponent);
   const table = { overview: V.overview, runs: a ? V.run : V.runs, datasets: a ? V.dataset : V.datasets, evals: a ? V.eval : V.evals,
-                  compare: V.compare, lab: a ? V.version : V.lab, project: V.project, usage: V.usage, billing: V.billing };
+                  compare: V.compare, lab: a ? V.version : V.lab, loop: V.loop, project: V.project, usage: V.usage, billing: V.billing };
   const fn = table[view] || V.overview;
   const navKey = view === "compare" ? "evals" : (table[view] ? view : "overview");
   if (!S.pid && !["usage", "billing"].includes(view)) {
@@ -742,6 +786,11 @@ const FORMS = {
       retention_days: f.retention_days.value ? +f.retention_days.value : null } } });
     toast("Settings saved."); route();
   },
+  async autonomy(f) {
+    const level = +f.autonomy.value;
+    if (level === 3 && !await ask({ title: "Let the loop release on its own?", body: "At autonomy 3 a winner goes to a canary and then to everyone when live traffic agrees, with no person in between. Pause stops it at any time.", ok: "Set autonomy 3", danger: true })) return;
+    await api(P() + "/loop", { method: "PATCH", body: { autonomy: level } }); toast("Autonomy set to " + level + "."); route();
+  },
   async newkey(f) {
     const k = await api("/keys", { body: { name: f.name.value, scope: f.scope.value } });
     await route();
@@ -770,6 +819,12 @@ const ACTS = {
     rz.open();
   },
   logout() { logout(); },
+  async loopstate(d) {
+    if (d.to === "pause" && !await ask({ title: "Pause the loop?", body: "Every canary stops and queued cycles are cancelled. The active versions stay exactly as they are.", ok: "Pause", danger: true })) return;
+    await api(`${P()}/loop/${d.to}`, { body: {} }); toast(d.to === "pause" ? "Paused." : "Resumed."); route();
+  },
+  async runloop() { const r = await api(P() + "/loop/run", { body: {} }); toast("Cycle queued (job " + r.job_id.slice(0, 8) + "). A worker runs it."); route(); },
+  async lesson(d) { await api(`${P()}/lessons/${d.id}/${d.to}`, { body: {} }); route(); },
   retry() { route(); },
   theme(d) {
     const root = document.documentElement;
