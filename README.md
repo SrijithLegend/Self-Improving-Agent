@@ -122,6 +122,45 @@ A ready-made GitHub Actions file is in
 sia dashboard     # opens at http://127.0.0.1:8000/dashboard
 ```
 
+## The self-improving loop
+
+SIA can also propose the changes itself, and keep one only when the evidence says so. Each **cycle**:
+
+1. **Looks at failures** on practice cases (the *dev* part of your test cases) and in live traffic.
+2. **Proposes a few changes**: a rewritten playbook, a small prompt edit, lessons it learned, few-shot examples,
+   retrieval settings, an output check, a helper tool, or another allowed model.
+3. **Screens** them on practice cases. The best must beat the current version there.
+4. **Decides on held-out cases** (the *holdout* part, about 30% of your cases). The step that proposes changes
+   never sees them.
+5. **Lets live traffic have the last word.** A winner first serves a share of real users (a *canary*). If it does
+   worse on errors, output checks or real outcomes, it's rolled back on its own.
+
+How much it may do alone is up to you (the **autonomy** setting):
+
+| Autonomy | The loop… |
+|---|---|
+| 0 | does nothing on its own. You run `sia improve`. |
+| 1 | proposes changes. A person approves them (the default for your own app). |
+| 2 | approves a holdout winner into a canary. A person makes it live for everyone (the default for hosted agents). |
+| 3 | also makes a canary live for everyone when live traffic agrees. Needs at least 20 held-out cases and one `critical` case. |
+
+```bash
+sia loop run --target app:answer --scorer contains   # one cycle for your own app, run where your code runs
+sia loop status                                      # autonomy, schedule, budget, running canaries
+sia loop pause                                       # the kill switch: stops canaries, queues nothing
+sia worker                                           # on a server: runs scheduled cycles and canary checks
+```
+
+What it can't do: it never changes model weights, never runs code it wrote, never grades itself for a release,
+never removes your `locked_text` lines, and stops at the LLM-call budget you set. Every step is in the audit log.
+See [`SELF_IMPROVING_SPEC.md`](SELF_IMPROVING_SPEC.md) for the design and `docs/AUDIT.md` section 4 for its limits.
+
+Try it with no key: `python examples/loop_demo.py --offline`. A returns agent learns the members' 60-day rule,
+wins on the held-out cases and is promoted through a canary. The "friendly" prompt line from the picture above is
+rejected, and when a person forces it into a canary anyway, live outcomes roll it back.
+
+<!-- LOOP-RESULTS -->
+
 ## Commands
 
 | Command | What it does |
@@ -132,6 +171,9 @@ sia dashboard     # opens at http://127.0.0.1:8000/dashboard
 | `sia eval gate` | Decides if a new prompt is safe to ship. Use it in CI. |
 | `sia improve` | Asks an AI model to suggest a better prompt, then tests it. Needs a model key. |
 | `sia versions` | Lists, approves, rejects or switches between prompt versions. Switching back undoes a change. |
+| `sia loop` | Runs an improvement cycle, shows the loop's status and history, or pauses and resumes it. |
+| `sia canary` | Serves an approved version to a share of users, then makes it live for everyone or stops it. |
+| `sia worker` | On a server: runs scheduled improvement cycles, canary checks and other background jobs. |
 | `sia runs` | Lists recorded runs, shows one, or exports them to a file. |
 | `sia feedback` | Lists corrections and marks each one as verified or rejected. |
 | `sia serve` | Starts SIA as a server so a whole team can share it. |

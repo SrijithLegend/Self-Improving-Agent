@@ -1,0 +1,53 @@
+{
+  "model": "gemini-flash-lite-latest",
+  "cases": 72,
+  "repeats": [
+    {
+      "repeat": 0,
+      "holdout_n": 34,
+      "start": 0.8676,
+      "scores": [
+        0.8676,
+        0.8676,
+        0.8676
+      ],
+      "promotions": 0,
+      "rollbacks": 0,
+      "critical_regressions": 0,
+      "calls": 331,
+      "cycles": [
+        {
+          "outcome": "no_improvement",
+          "calls": 102,
+          "holdout": null,
+          "tried": [
+            "swap_exemplars"
+          ]
+        },
+        {
+          "outcome": "no_improvement",
+          "calls": 117,
+          "holdout": null,
+          "tried": [
+            "rewrite_playbook",
+            "tune_retrieval"
+          ]
+        },
+        {
+          "outcome": "no_improvement",
+          "calls": 78,
+          "holdout": null,
+          "tried": [
+            "tune_retrieval",
+            "swap_exemplars"
+          ]
+        },
+        {
+          "outcome": "failed",
+          "error": "Unavailable: gemini error 429: {\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.g"
+        }
+      ],
+      "final": 0.8676
+    }
+  ]
+}

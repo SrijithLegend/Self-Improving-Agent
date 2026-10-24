@@ -312,7 +312,13 @@ def curve(db_dir, repeats=3, cycles=6, n=64, rpm=14, out_path=None, start_repeat
         dev = DevStore(os.path.join(db_dir, f"curve-{r}.db"))
         pid, did = real_setup(dev, cases)
         hold_n = len(dev.dataset(LOCAL_ORG, pid, did, split="holdout")["examples"])
-        ev0, _ = Evaluator(dev, LOCAL_ORG, pid).evaluate(1, did, "holdout", 1, "curve:start")
+        try:
+            ev0, _ = Evaluator(dev, LOCAL_ORG, pid).evaluate(1, did, "holdout", 1, "curve:start")
+        except Exception as e:  # noqa: BLE001 - out of quota before this repeat could start
+            print(f"\nrepeat {r}: could not start: {type(e).__name__}: {str(e)[:150]}")
+            results.setdefault("stopped", f"repeat {r} could not start: {type(e).__name__}")
+            Path(out_path).write_text(json.dumps(results, indent=2), encoding="utf-8")
+            break
         row = {"repeat": r, "holdout_n": hold_n, "start": ev0["summary"]["score"], "scores": [], "promotions": 0,
                "rollbacks": 0, "critical_regressions": 0, "calls": ev0["summary"]["n"], "cycles": []}
         results["repeats"] = [x for x in results["repeats"] if x["repeat"] != r] + [row]
@@ -415,12 +421,25 @@ def adversarial(db_dir, rpm=14, out_path=None):
     return report
 
 
+def table(results):
+    """The README table for --curve results: one row per repeat, every cycle's holdout score."""
+    rows = ["| Repeat | Held out | Start | " + " | ".join(f"After {i}" for i in range(1, 7)) + " | Promoted | Rolled back "
+            "| Calls |", "|---|---|---|" + "---|" * 6 + "---|---|---|"]
+    for r in sorted(results["repeats"], key=lambda x: x["repeat"]):
+        cells = [f"{x:.3f}" for x in r["scores"]] + ["stopped" if any(c["outcome"] == "failed" for c in r["cycles"])
+                                                     else "–"] * (6 - len(r["scores"]))
+        rows.append(f"| {r['repeat'] + 1} | {r['holdout_n']} | {r['start']:.3f} | " + " | ".join(cells[:6])
+                    + f" | {r['promotions']} | {r['rollbacks']} | {r['calls']:,} |")
+    return "\n".join(rows)
+
+
 def main(argv=None, db=None):
     a = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     mode = a.add_mutually_exclusive_group(required=True)
     mode.add_argument("--offline", action="store_true", help="scripted model, no key needed")
     mode.add_argument("--curve", action="store_true", help="real model: the learning curve, 3 repeats")
     mode.add_argument("--adversarial", action="store_true", help="real model: attacks on the loop")
+    mode.add_argument("--table", metavar="CURVE_JSON", help="print the README table for --curve results")
     a.add_argument("--db", default=db, help="--offline: the database file")
     a.add_argument("--out", help="--curve/--adversarial: where to write the JSON results")
     a.add_argument("--dir", help="--curve/--adversarial: directory for the databases")
@@ -430,6 +449,9 @@ def main(argv=None, db=None):
     a.add_argument("--cases", type=int, default=64)
     a.add_argument("--rpm", type=float, default=14, help="requests per minute to the model (free tier: 15)")
     args = a.parse_args(argv)
+    if args.table:
+        print(table(json.loads(Path(args.table).read_text(encoding="utf-8"))))
+        return None
     d = args.dir or tempfile.mkdtemp(prefix="sia-loop-")
     os.makedirs(d, exist_ok=True)
     if args.curve:

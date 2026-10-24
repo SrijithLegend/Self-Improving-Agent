@@ -6,6 +6,7 @@ model from the actor's (G1), unless settings.loop.allow_same_model_judge says ot
 is never a score here.
 """
 import hashlib
+import json
 import time
 import uuid
 from statistics import mean
@@ -101,6 +102,22 @@ class Evaluator:
                         "score": score, "passed": score >= PASS_THRESHOLD, "error": errors[0] if errors else None,
                         "duration_ms": mean(took)})
         return out
+
+    def reuse(self, version, dataset_id, split, trials=1, max_age=86400):
+        """The loop's latest evaluation of this version on the same dataset version, split, scorers and trials, if
+        it is recent: re-scoring an unchanged config each cycle only spends calls. Returns (evaluation, results)."""
+        cfg = config.parse(self.dev.version(self.org, self.pid, config.CONFIG_NAME, version)["content"])
+        want = sorted(json.dumps(s.describe()) for s in self._scorers(cfg))
+        ds_version = self.dev.dataset(self.org, self.pid, dataset_id)["version"]
+        for e in self.dev.evaluations(self.org, self.pid, dataset_id, limit=50)["items"]:
+            c = e["config"]
+            if (e["version_name"], e["version"], e["dataset_version"], c.get("split"), c.get("trials")) == (
+                    config.CONFIG_NAME, version, ds_version, split, trials) and time.time() - e["created"] < max_age \
+                    and sorted(json.dumps(s) for s in c["scorers"]) == want and (c.get("metadata") or {}).get("by") \
+                    == "sia-loop":
+                full = self.dev.evaluation(self.org, self.pid, e["id"])
+                return full, [{**r, "split": split} for r in full["results"]]
+        return None
 
     def evaluate(self, version, dataset_id, split, trials=1, name=None):
         """Evaluate a stored agent_config version on a full split and record it as a DevTools evaluation (so it can

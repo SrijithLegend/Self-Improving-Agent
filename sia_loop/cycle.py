@@ -88,6 +88,7 @@ def run_cycle(dev, org, pid, *, payload=None, llm_for=None, judge_llm=None, quot
     per_task = actor_calls_per_task(dev, org, pid, active_cfg, active["version"])
     est = budgets.estimate(candidates=k, screen_n=screen_n, dev_n=len(dev_ex), holdout_n=len(hold_ex),
                            trials=trials, actor_calls=per_task, judge_calls=1 if "judge" in loop["scorers"] else 0)
+    # ponytail: the estimate still counts the dev baseline even when a recent one is reused (it errs on the safe side)
     left = quota(org) if quota else None
     record.update(estimate=est, cap=loop["max_calls_per_cycle"], quota_left=left)
     if est > loop["max_calls_per_cycle"] or (left is not None and est > left):
@@ -111,9 +112,12 @@ def run_cycle(dev, org, pid, *, payload=None, llm_for=None, judge_llm=None, quot
                 c["status"], c["reason"] = "rejected", reason
 
     try:
-        say("baseline", version=active["version"])
-        base_dev, base_dev_res = ev_runner.evaluate(active["version"], ds["id"], "dev", trials, "loop:baseline:dev")
-        record["baseline_dev"] = {"evaluation_id": base_dev["id"], "score": base_dev["summary"]["score"]}
+        reused = ev_runner.reuse(active["version"], ds["id"], "dev", trials)
+        base_dev, base_dev_res = reused or ev_runner.evaluate(active["version"], ds["id"], "dev", trials,
+                                                              "loop:baseline:dev")
+        say("baseline", version=active["version"], reused=bool(reused))
+        record["baseline_dev"] = {"evaluation_id": base_dev["id"], "score": base_dev["summary"]["score"],
+                                  "reused": bool(reused)}
 
         runs, corrections, transcripts = _live_evidence(dev, org, pid)
         clusters = memory.failure_clusters(base_dev_res, runs, corrections, dev.holdout_inputs(org, pid))

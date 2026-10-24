@@ -308,3 +308,17 @@ def test_g10_no_tool_code_can_execute_what_an_agent_wrote():
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 names = [n.name for n in node.names] + ([node.module] if isinstance(node, ast.ImportFrom) else [])
                 assert not {(n or "").split(".")[0] for n in names} & modules, f"{f.name}:{node.lineno} {names}"
+
+
+def test_an_unchanged_baseline_is_not_scored_twice(agent):
+    dev, pid, _ = agent
+    from sia_loop import cycle
+    first = cycle.run_cycle(dev, LOCAL_ORG, pid, payload={"operators": ["tune_retrieval"]})
+    second = cycle.run_cycle(dev, LOCAL_ORG, pid, payload={"operators": ["tune_retrieval"]})
+    assert not first["baseline_dev"]["reused"] and second["baseline_dev"]["reused"]
+    assert second["baseline_dev"]["evaluation_id"] == first["baseline_dev"]["evaluation_id"]
+    assert second["calls"] < first["calls"]
+    dev.add_examples(LOCAL_ORG, pid, dev.datasets(LOCAL_ORG, pid, "eval")[0]["id"],
+                     [{"input": "Can I return the tent (order 1) bought 5 days ago?", "expected_output": "DECISION: YES"}])
+    third = cycle.run_cycle(dev, LOCAL_ORG, pid, payload={"operators": ["tune_retrieval"]})
+    assert not third["baseline_dev"]["reused"]  # the dataset changed: score it again
