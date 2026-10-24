@@ -25,4 +25,4 @@ jobs:
       - run: pip-audit --skip-editable
       # code scan, medium severity and up. B608 (string-built SQL) is skipped: every dynamic fragment was
       # reviewed and is a fixed string or a whitelisted column name, and all values are bound parameters.
-      - run: bandit -q -r sia sia_devtools -ll --skip B608
+      - run: bandit -q -r sia sia_devtools sia_loop -ll --skip B608

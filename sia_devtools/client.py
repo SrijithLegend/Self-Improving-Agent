@@ -218,13 +218,25 @@ class Dataset:
               "DELETE", self._path(f"/examples/{example_id}"))
         self.refresh()
 
-    def snapshot(self, version: int | None = None) -> dict:
+    def snapshot(self, version: int | None = None, split: str | None = None,
+                 include_pending: bool = False) -> dict:
+        """The examples as of `version`. split='dev' or 'holdout' keeps one split (None: both). Pending examples
+        are never evaluated; include_pending lists them too."""
         c = self._c
-        return c._do(lambda: c._store.dataset(LOCAL_ORG, c.project_id, self.id, version), "GET", self._path(),
-                     params={"version": version})
+        return c._do(lambda: c._store.dataset(LOCAL_ORG, c.project_id, self.id, version, split, include_pending),
+                     "GET", self._path(), params={"version": version, "split": split,
+                                                  "include_pending": include_pending or None})
 
-    def examples(self, version: int | None = None) -> list[dict]:
-        return self.snapshot(version)["examples"]
+    def examples(self, version: int | None = None, split: str | None = None) -> list[dict]:
+        return self.snapshot(version, split)["examples"]
+
+    def review_example(self, example_id: int, status: str) -> int | None:
+        """Verify or reject a pending example. Verifying returns the id of its verified copy."""
+        c = self._c
+        out = c._do(lambda: {"new_id": c._store.review_example(LOCAL_ORG, c.project_id, self.id, example_id, status)},
+                    "POST", self._path(f"/examples/{example_id}/{'verify' if status == 'verified' else 'reject'}"))
+        self.refresh()
+        return out["new_id"]
 
     def history(self) -> list[dict]:
         c = self._c
@@ -446,6 +458,15 @@ class SIAClient:
                 f.writelines(json.dumps(r) + "\n" for r in rows)
         return rows
 
+    def outcome(self, run: "Run | str", ok: bool, *, source: str) -> dict:
+        """Report what really happened after a run, from your own system (source names it, e.g. 'refunds-db'). It is
+        the strongest live signal SIA gets, because a person's opinion isn't involved."""
+        run_id = run.id if isinstance(run, Run) else run
+        self.flush()
+        body = {"ok": ok, "source": source}
+        return self._do(lambda: self._store.record_outcome(LOCAL_ORG, self.project_id, run_id, ok, source),
+                        "POST", self._p(f"/runs/{run_id}/outcome"), body)
+
     # --- feedback -------------------------------------------------------------
     def feedback(self, run: "Run | str", rating: int, *, correction: Any = None, category: str | None = None,
                  explanation: str | None = None, reviewer: str | None = None) -> dict:
@@ -490,15 +511,16 @@ class SIAClient:
     def evaluate(self, dataset: "Dataset | str", target: Callable, scorers: Iterable = ("exact_match",), *,
                  prompt: str | None = None, version: "int | str | None" = None, version_name: str = "system_prompt",
                  trials: int = 1, pass_threshold: float = 0.75, name: str | None = None,
-                 metadata: dict | None = None, dataset_version: int | None = None) -> dict:
+                 metadata: dict | None = None, dataset_version: int | None = None, split: str | None = None) -> dict:
         """Run `target` on every example of a pinned dataset version and score it.
 
         target(input) is called as is, or target(input, prompt) when a prompt is given directly or through
         `version` (a version number or "active"). Exceptions in target are recorded per example (score 0), not
-        raised. The evaluation is stored only once every example has a result.
+        raised. The evaluation is stored only once every example has a result. split='dev' or 'holdout' evaluates
+        one split only (two evaluations are comparable only if they used the same split).
         """
         ds = dataset if isinstance(dataset, Dataset) else self.dataset(dataset)
-        snap = ds.snapshot(dataset_version)
+        snap = ds.snapshot(dataset_version, split)
         if not snap["examples"]:
             raise ValidationError(f"Dataset '{ds.name}' has no examples at version {snap['snapshot_version']}.")
         if not 1 <= trials <= 10:
@@ -547,7 +569,7 @@ class SIAClient:
               "version_name": version_name if vnum is not None else None, "version": vnum,
               "prompt_sha": hashlib.sha256(prompt.encode()).hexdigest() if prompt is not None else None,
               "config": {"scorers": [s.describe() for s in sc], "trials": trials, "pass_threshold": pass_threshold,
-                         "metadata": metadata or {}},
+                         "metadata": metadata or {}, **({"split": split} if split else {})},
               "results": results}
         return self._do(lambda: self._store.record_evaluation(LOCAL_ORG, self.project_id, ev),
                         "POST", self._p("/evaluations"), ev)

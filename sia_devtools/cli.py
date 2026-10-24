@@ -224,6 +224,20 @@ def cmd_serve(a, local_db=None):
     return 0
 
 
+def cmd_worker(a):
+    from sia_loop import jobs
+    from sia_devtools.store import DevStore
+    dev = DevStore(a.db)
+    if not a.once:
+        print(f"SIA worker on {a.db} ({a.concurrency} thread(s)); Ctrl+C to stop")
+    try:
+        n = jobs.work(dev, jobs.default_handlers(), once=a.once, concurrency=a.concurrency)
+    except KeyboardInterrupt:
+        return 0
+    say(f"ran {n} job(s)")
+    return 0
+
+
 def cmd_create_tenant(a):
     from sia.store import Store
     say(json.dumps(Store(os.getenv("SIA_DB", "sia.db")).create_tenant(a.org_name), indent=2))
@@ -372,6 +386,12 @@ def parser():
     d.add_argument("--db", default=os.getenv("SIA_LOCAL_DB", "sia_local.db"))
     d.add_argument("--port", type=int, default=8000)
     d.set_defaults(fn=lambda a: cmd_serve(a, a.db), host="127.0.0.1")
+
+    w = sub.add_parser("worker", help="run queued jobs: improvement cycles, canary checks, evaluations")
+    w.add_argument("--db", default=os.getenv("SIA_DB") or os.getenv("SIA_LOCAL_DB") or "sia.db")
+    w.add_argument("--once", action="store_true", help="run the jobs that are due, then exit")
+    w.add_argument("--concurrency", type=int, default=1)
+    w.set_defaults(fn=cmd_worker)
 
     t = sub.add_parser("create-tenant", aliases=["create-org"], help="create an organization and print its key")
     t.add_argument("org_name")

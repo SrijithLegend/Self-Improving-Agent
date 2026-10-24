@@ -27,6 +27,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from sia_devtools.errors import NotFound, QuotaExceeded, SIAError, ValidationError
 from sia_devtools.store import LOCAL_ORG, DevStore
 
+from sia_loop import jobs
+
 from . import billing
 from . import security as sec
 from .agent import Agent
@@ -398,6 +400,11 @@ class TraceIn(Strict):
 
 class RunsIn(Strict):
     runs: list[TraceIn] = Field(min_length=1, max_length=500)
+
+
+class OutcomeIn(Strict):
+    ok: bool
+    source: str = Field(min_length=1, max_length=100, description="Which system reported it, e.g. 'refunds-db'.")
 
 
 class FeedbackIn2(Strict):
@@ -806,6 +813,12 @@ def add_feedback(project_id: str, run_id: str, body: FeedbackIn2, t=Depends(key_
     return dev.add_feedback(t["id"], project_id, run_id, **body.model_dump())
 
 
+@app.post("/v1/projects/{project_id}/runs/{run_id}/outcome")
+def record_outcome(project_id: str, run_id: str, body: OutcomeIn, t=Depends(key_auth)):
+    """An outcome signal from your own system (not a person): did what the run decided actually work out?"""
+    return dev.record_outcome(t["id"], project_id, run_id, body.ok, body.source)
+
+
 @app.get("/v1/projects/{project_id}/feedback")
 def list_feedback(project_id: str, status: str | None = None, run_id: str | None = None, limit: int = 50,
                   offset: int = 0, t=Depends(tenant)):
@@ -835,8 +848,18 @@ def list_datasets(project_id: str, name: str | None = None, t=Depends(tenant)):
 
 
 @app.get("/v1/projects/{project_id}/datasets/{dataset_id}")
-def get_dataset(project_id: str, dataset_id: str, version: int | None = None, t=Depends(tenant)):
-    return dev.dataset(t["id"], project_id, dataset_id, version)
+def get_dataset(project_id: str, dataset_id: str, version: int | None = None,
+                split: Literal["dev", "holdout"] | None = None, include_pending: bool = False, t=Depends(tenant)):
+    return dev.dataset(t["id"], project_id, dataset_id, version, split, include_pending)
+
+
+@app.post("/v1/projects/{project_id}/datasets/{dataset_id}/examples/{example_id}/{decision}")
+def review_dataset_example(project_id: str, dataset_id: str, example_id: int, decision: Literal["verify", "reject"],
+                           t=Depends(tenant)):
+    """Verify or reject a pending example (for example one written by study). Only verified examples are tested."""
+    new_id = dev.review_example(t["id"], project_id, dataset_id, example_id,
+                                "verified" if decision == "verify" else "rejected", actor(t))
+    return {"id": example_id, "status": "verified" if decision == "verify" else "rejected", "new_id": new_id}
 
 
 @app.get("/v1/projects/{project_id}/datasets/{dataset_id}/history")
@@ -860,6 +883,22 @@ def update_dataset_example(project_id: str, dataset_id: str, example_id: int, bo
 @app.delete("/v1/projects/{project_id}/datasets/{dataset_id}/examples/{example_id}", status_code=204)
 def delete_dataset_example(project_id: str, dataset_id: str, example_id: int, t=Depends(tenant)):
     dev.delete_example(t["id"], project_id, dataset_id, example_id)
+
+
+# --- jobs ---------------------------------------------------------------------------
+@app.get("/v1/projects/{project_id}/jobs")
+def list_jobs(project_id: str, kind: str | None = None, limit: int = 50, t=Depends(tenant)):
+    return jobs.jobs(dev, t["id"], project_id, limit, kind)
+
+
+@app.get("/v1/jobs/{job_id}")
+def get_job(job_id: str, t=Depends(tenant)):
+    return jobs.get(dev, t["id"], job_id)
+
+
+@app.post("/v1/jobs/{job_id}/cancel")
+def cancel_job(job_id: str, t=Depends(tenant)):
+    return jobs.cancel(dev, t["id"], job_id)
 
 
 # --- DevTools: evaluations and comparisons -----------------------------------------

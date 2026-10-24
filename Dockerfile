@@ -4,6 +4,7 @@ WORKDIR /app
 COPY pyproject.toml README.md LICENSE.md ./
 COPY sia ./sia
 COPY sia_devtools ./sia_devtools
+COPY sia_loop ./sia_loop
 COPY web ./web
 RUN pip install --upgrade pip && pip install ".[server]"
 RUN useradd --create-home --uid 10001 sia && mkdir /data && chown sia /data

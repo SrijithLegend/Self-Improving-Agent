@@ -38,7 +38,7 @@ dev = ["pytest>=8", "fastapi>=0.110", "uvicorn>=0.29", "pydantic>=2", "python-do
 sia = "sia_devtools.cli:main"
 
 [tool.setuptools]
-packages = ["sia", "sia_devtools"]
+packages = ["sia", "sia_devtools", "sia_loop", "sia_loop.tools"]
 
 [tool.setuptools.package-data]
 sia = ["dashboard.html"]

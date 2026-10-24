@@ -4,6 +4,7 @@ Every public method takes the caller's org id and checks that the project belong
 local mode (org "local") and the hosted API (org = the authenticated organization). IDs from another project or
 org are simply "not found".
 """
+import hashlib
 import json
 import re
 import sqlite3
@@ -202,11 +203,48 @@ CREATE TABLE IF NOT EXISTS active_versions (project_id TEXT NOT NULL, name TEXT 
 CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, project_id TEXT, actor TEXT, action TEXT, detail TEXT,
     created REAL);
 CREATE INDEX IF NOT EXISTS idx_audit ON audit(project_id, created)
+"""), ("devtools-002", """
+ALTER TABLE dataset_examples ADD COLUMN split TEXT NOT NULL DEFAULT 'dev';
+ALTER TABLE dataset_examples ADD COLUMN status TEXT NOT NULL DEFAULT 'verified';
+CREATE INDEX IF NOT EXISTS idx_dataset_examples_split ON dataset_examples(dataset_id, split)
+"""), ("devtools-004", """
+CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, kind TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued', payload TEXT, result TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+    run_after REAL, started REAL, finished REAL, created REAL, locked_by TEXT, heartbeat REAL);
+CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs(status, run_after);
+CREATE INDEX IF NOT EXISTS idx_jobs_project ON jobs(project_id, created)
 """)]
+SPLITS = ("dev", "holdout")
 
 RUN_STATUSES = ("running", "success", "error")
 NOT_EVAL = "NOT EXISTS (SELECT 1 FROM json_each(runs.tags) WHERE value='eval')"  # production traffic only
-DEFAULT_SETTINGS = {"redact": DEFAULT_REDACT, "retention_days": None, "policy": DEFAULT_POLICY, "locked_text": []}
+# the self-improving loop (sia_loop), per project. These defaults leave an upgraded project exactly as it was:
+# autonomy 0 means a human runs every step.
+DEFAULT_LOOP = {
+    "autonomy": 0, "holdout_pct": 30, "holdout_min_examples": 20, "trials": 2, "candidates_per_cycle": 4,
+    "max_calls_per_cycle": 400, "max_promotions_per_day": 2, "every_hours": 24, "new_examples_trigger": 10,
+    "canary_pct": 10, "canary_min_runs": 200, "canary_min_hours": 24,
+    "allowed_models": ["gemini-flash-latest", "gemini-flash-lite-latest"],
+    "allowed_tools": ["search_knowledge", "calculator", "lookup_table"], "allow_macros": True, "http_allowlist": [],
+    "judge": {"provider": "anthropic", "model": "claude-haiku-5-5"}, "allow_same_model_judge": False,
+    "auto_verify_outcomes": False, "webhook_url": None, "paused": False,
+}
+LOOP_BOUNDS = {"autonomy": (0, 3), "holdout_pct": (20, 50), "holdout_min_examples": (1, 10_000), "trials": (1, 10),
+               "candidates_per_cycle": (1, 9), "max_calls_per_cycle": (10, 5_000), "max_promotions_per_day": (0, 100),
+               "every_hours": (1, 168), "new_examples_trigger": (1, 10_000), "canary_pct": (1, 50),
+               "canary_min_runs": (1, 1_000_000), "canary_min_hours": (0, 720)}
+LOOP_TOOLS = ("search_knowledge", "calculator", "lookup_table", "http_get")
+MODEL_NAME_RX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$")
+HOST_RX = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}"
+                     r"[A-Za-z0-9])?)*$")
+DEFAULT_SETTINGS = {"redact": DEFAULT_REDACT, "retention_days": None, "policy": DEFAULT_POLICY, "locked_text": [],
+                    "kind": "app", "agent": None, "loop": DEFAULT_LOOP}
+
+
+def split_for(did, root, pct):
+    """dev or holdout, fixed forever for an example: a hash of the dataset and the example's original id (an edit keeps
+    the split of the example it replaces), so no one can move a case into or out of the held-out exam."""
+    return "holdout" if int(hashlib.sha256(f"{did}:{root}".encode()).hexdigest(), 16) % 100 < pct else "dev"
 
 
 def _id(v, what="id"):
@@ -247,6 +285,55 @@ def validate_policy(p):
     return out
 
 
+def validate_loop(new, base):
+    if not isinstance(new, dict) or set(new) - set(DEFAULT_LOOP):
+        raise ValidationError(f"loop keys must be among: {', '.join(DEFAULT_LOOP)}")
+    out = {**DEFAULT_LOOP, **(base or {})}
+    for k, v in new.items():
+        if k in LOOP_BOUNDS:
+            out[k] = _num(v, f"loop.{k}", *LOOP_BOUNDS[k], integer=True)
+            if out[k] is None:
+                raise ValidationError(f"loop.{k} cannot be null")
+        elif k in ("allow_macros", "allow_same_model_judge", "auto_verify_outcomes", "paused"):
+            if not isinstance(v, bool):
+                raise ValidationError(f"loop.{k} must be true or false")
+            out[k] = v
+        elif k == "allowed_models":
+            if not isinstance(v, list) or not 0 < len(v) <= 10 or not all(isinstance(m, str) and
+                                                                         MODEL_NAME_RX.match(m) for m in v):
+                raise ValidationError("loop.allowed_models must list 1-10 model names")
+            out[k] = v
+        elif k == "allowed_tools":
+            if not isinstance(v, list) or len(v) > 10 or set(v) - set(LOOP_TOOLS):
+                raise ValidationError(f"loop.allowed_tools must be a subset of {', '.join(LOOP_TOOLS)}")
+            out[k] = v
+        elif k == "http_allowlist":
+            if not isinstance(v, list) or len(v) > 20 or not all(isinstance(h, str) and HOST_RX.match(h) for h in v):
+                raise ValidationError("loop.http_allowlist must list up to 20 host names")
+            out[k] = [h.lower() for h in v]
+        elif k == "judge":
+            if v is not None and (not isinstance(v, dict) or set(v) != {"provider", "model"} or not all(
+                    isinstance(x, str) and MODEL_NAME_RX.match(x) for x in v.values())):
+                raise ValidationError('loop.judge must be null or {"provider": "...", "model": "..."}')
+            out[k] = v
+        elif k == "webhook_url":
+            if v is not None and (not isinstance(v, str) or len(v) > 500 or
+                                  not re.match(r"^https://[^\s/?#@]+(/[^\s#]*)?$", v)):
+                raise ValidationError("loop.webhook_url must be null or an https:// URL")
+            out[k] = v
+    return out
+
+
+def validate_agent(v):
+    """settings.agent for kind="agent" projects: what the hosted agent is for, as plain text."""
+    if v is None:
+        return None
+    limits = {"domain": 500, "instructions": 20_000, "rubric": 5_000}
+    if not isinstance(v, dict) or set(v) - set(limits) or not all(isinstance(x, str) for x in v.values()):
+        raise ValidationError("agent must be an object with string fields domain, instructions, rubric")
+    return {k: v.get(k, "")[:n] for k, n in limits.items()}
+
+
 def validate_settings(new, base=None, custom=True, stored=False):
     """custom=False (the hosted server) allows only named redaction rules. stored=True loads settings already in the
     database without re-checking their patterns, so a project with an old pattern can still be read and fixed."""
@@ -273,6 +360,14 @@ def validate_settings(new, base=None, custom=True, stored=False):
         if not isinstance(lt, list) or len(lt) > 20 or not all(isinstance(t, str) and t.strip() for t in lt):
             raise ValidationError("locked_text must be a list of up to 20 non-empty strings")
         s["locked_text"] = lt
+    if "kind" in new:
+        if new["kind"] not in ("app", "agent"):
+            raise ValidationError("kind must be 'app' (your own app) or 'agent' (a hosted SIA agent)")
+        s["kind"] = new["kind"]
+    if "agent" in new:
+        s["agent"] = validate_agent(new["agent"])
+    if "loop" in new:
+        s["loop"] = validate_loop(new["loop"], s.get("loop"))
     return s
 
 
@@ -281,6 +376,24 @@ class DevStore:
         """custom_regex=False on the hosted server: custom redaction patterns are refused and never run there."""
         self.path, self.custom_regex = path, custom_regex
         migrate(path, MIGRATIONS)
+        self._backfill_splits()
+
+    def _backfill_splits(self):
+        """One-time (devtools-002-backfill): give examples stored before splits existed their deterministic split."""
+        with self._conn(write=True) as c:
+            if c.execute("SELECT 1 FROM schema_migrations WHERE id='devtools-002-backfill'").fetchone():
+                return
+            rows = c.execute("""SELECT e.id, e.dataset_id, e.replaces, p.settings FROM dataset_examples e
+                JOIN datasets d ON d.id=e.dataset_id JOIN projects p ON p.id=d.project_id""").fetchall()
+            parent = {r["id"]: r["replaces"] for r in rows}
+            for r in rows:
+                root = r["id"]
+                while parent.get(root):
+                    root = parent[root]
+                pct = validate_settings(json.loads(r["settings"] or "{}"), stored=True)["loop"]["holdout_pct"]
+                c.execute("UPDATE dataset_examples SET split=? WHERE id=?", (split_for(r["dataset_id"], root, pct),
+                                                                           r["id"]))
+            c.execute("INSERT INTO schema_migrations VALUES ('devtools-002-backfill', ?)", (time.time(),))
 
     @contextmanager
     def _conn(self, write=False):
@@ -590,9 +703,15 @@ class DevStore:
         return dict(row)
 
     @staticmethod
-    def _snapshot(c, did, version):
+    def _snapshot(c, did, version, split=None, pending=False):
+        """The examples of a dataset version. Pending (unverified) examples are left out unless asked for: they
+        are never part of an evaluation."""
+        if split not in (None, *SPLITS):
+            raise ValidationError(f"split must be one of {SPLITS}")
         return c.execute("SELECT * FROM dataset_examples WHERE dataset_id=? AND added_in<=? AND "
-                         "(removed_in IS NULL OR removed_in>?) ORDER BY id", (did, version, version)).fetchall()
+                         "(removed_in IS NULL OR removed_in>?)" + ("" if pending else " AND status='verified'")
+                         + (" AND split=?" if split else "") + " ORDER BY id",
+                         (did, version, version, *([split] if split else []))).fetchall()
 
     @staticmethod
     def _ex_out(row):
@@ -623,15 +742,17 @@ class DevStore:
                 ORDER BY created""", (pid, *([name] if name else []))).fetchall()
             return [dict(r) for r in rows]
 
-    def dataset(self, org, pid, did, version=None):
-        """The dataset with its examples as of `version` (default: current). Old versions are immutable."""
+    def dataset(self, org, pid, did, version=None, split=None, include_pending=False):
+        """The dataset with its examples as of `version` (default: current). Old versions are immutable. `split`
+        ('dev' or 'holdout') keeps one split; pending examples are listed only with include_pending."""
         with self._conn() as c:
             self._project(c, org, pid)
             d = self._dataset(c, pid, did)
             v = d["version"] if version is None else int(version)
             if not 0 <= v <= d["version"]:
                 raise ValidationError(f"Dataset has versions 0-{d['version']}.")
-            return {**d, "snapshot_version": v, "examples": [self._ex_out(r) for r in self._snapshot(c, did, v)]}
+            return {**d, "snapshot_version": v, "split": split,
+                    "examples": [self._ex_out(r) for r in self._snapshot(c, did, v, split, include_pending)]}
 
     def count_examples(self, org, pid, did):
         with self._conn() as c:
@@ -661,16 +782,28 @@ class DevStore:
         return rows
 
     def _insert_examples(self, c, pid, did, rows, source="user", source_run_id=None, feedback_id=None,
-                         replaces=None):
+                         replaces=None, status="verified", split=None):
+        """split=None assigns it (split_for); an edit keeps the split of the example it replaces."""
+        if status not in ("verified", "pending") or split not in (None, *SPLITS):
+            raise ValidationError("status must be verified or pending, split dev or holdout")
         v = self._bump(c, did)
-        ids = [c.execute("""INSERT INTO dataset_examples (dataset_id, input, expected, metadata, critical, source,
-            source_run_id, feedback_id, replaces, added_in, created) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                         (did, *r, source, source_run_id, feedback_id, replaces, v, time.time())).lastrowid
-               for r in rows]
-        self._audit(c, pid, None, "dataset.add", {"dataset_id": did, "version": v, "example_ids": ids})
+        pct = self._proj(c.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone())["settings"]["loop"][
+            "holdout_pct"]
+        kept = c.execute("SELECT split FROM dataset_examples WHERE id=?", (replaces,)).fetchone() if replaces else None
+        ids = []
+        for r in rows:
+            eid = c.execute("""INSERT INTO dataset_examples (dataset_id, input, expected, metadata, critical, source,
+                source_run_id, feedback_id, replaces, added_in, created, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (did, *r, source, source_run_id, feedback_id, replaces, v, time.time(), status)).lastrowid
+            c.execute("UPDATE dataset_examples SET split=? WHERE id=?",
+                      (split or (kept["split"] if kept else split_for(did, eid, pct)), eid))
+            ids.append(eid)
+        self._audit(c, pid, None, "dataset.add", {"dataset_id": did, "version": v, "example_ids": ids,
+                                                  **({"status": status} if status != "verified" else {})})
         return ids
 
-    def add_examples(self, org, pid, did, items, allow_duplicates=False, max_examples=None):
+    def add_examples(self, org, pid, did, items, allow_duplicates=False, max_examples=None, status="verified",
+                     split=None, source="user"):
         """Add examples as one new dataset version. An example whose (input, expected_output) matches a live
         example, or an earlier one in the same batch, is skipped and its existing id returned: re-running a script
         must not count the same case twice in every evaluation. If everything is skipped, the version stays.
@@ -687,7 +820,8 @@ class DevStore:
                     raise QuotaExceeded(f"This plan allows {max_examples} examples per dataset.")
             if allow_duplicates:
                 check(len(rows))
-                return {"ids": self._insert_examples(c, pid, did, rows), "skipped": 0}
+                return {"ids": self._insert_examples(c, pid, did, rows, source, status=status, split=split),
+                        "skipped": 0}
             seen = {(r["input"], r["expected"]): r["id"] for r in c.execute(
                 "SELECT id, input, expected FROM dataset_examples WHERE dataset_id=? AND removed_in IS NULL", (did,))}
             new, slots = [], []  # slots: an existing id, or the index of the row in `new`
@@ -700,7 +834,7 @@ class DevStore:
                     slots.append(seen[key])
                     new.append(r)
             check(len(new))
-            new_ids = self._insert_examples(c, pid, did, new) if new else []
+            new_ids = self._insert_examples(c, pid, did, new, source, status=status, split=split) if new else []
             ids = [new_ids[s[1]] if isinstance(s, tuple) else s for s in slots]
             return {"ids": ids, "skipped": len(rows) - len(new)}
 
@@ -739,6 +873,58 @@ class DevStore:
             c.execute("UPDATE dataset_examples SET removed_in=? WHERE id=?", (v, eid))
             self._audit(c, pid, None, "dataset.delete", {"dataset_id": did, "version": v, "example_id": eid})
 
+    def review_example(self, org, pid, did, eid, status, actor=None):
+        """pending -> verified | rejected. Verifying closes the pending row and adds a verified copy at a new dataset
+        version (same split), so no earlier snapshot changes; rejecting just removes it. Returns the new id or None."""
+        if status not in ("verified", "rejected"):
+            raise ValidationError("status must be 'verified' or 'rejected'")
+        with self._conn(write=True) as c:
+            self._project(c, org, pid)
+            self._dataset(c, pid, did)
+            old = self._live_example(c, did, eid)
+            if old["status"] != "pending":
+                raise Conflict(f"Example {eid} is already {old['status']}.")
+            new_id = None
+            if status == "verified":
+                row = c.execute("SELECT input, expected, metadata, critical FROM dataset_examples WHERE id=?",
+                                (eid,)).fetchone()
+                new_id = self._insert_examples(c, pid, did, [tuple(row)], old["source"], old["source_run_id"],
+                                               old["feedback_id"], replaces=eid)[0]
+                v = c.execute("SELECT version FROM datasets WHERE id=?", (did,)).fetchone()[0]
+            else:
+                v = self._bump(c, did)
+            c.execute("UPDATE dataset_examples SET removed_in=? WHERE id=?", (v, eid))
+            self._audit(c, pid, actor, f"example.{status}", {"dataset_id": did, "example_id": eid, "new_id": new_id})
+            return new_id
+
+    # --- outcomes -------------------------------------------------------------
+    def record_outcome(self, org, pid, rid, ok, source):
+        """A signal from the customer's own system about a run ("the refund really was reversed"). It is stored on
+        the run as scores.outcome (1 or 0). With settings.loop.auto_verify_outcomes, a good outcome also adds the run
+        as a verified example to the 'eval' dataset, always in the dev split: it can teach, never decide a release."""
+        if not isinstance(ok, bool):
+            raise ValidationError("ok must be true or false")
+        source = _text(source, "source", 100, required=True)
+        with self._conn(write=True) as c:
+            p = self._project(c, org, pid)
+            run = c.execute("SELECT * FROM runs WHERE project_id=? AND id=?", (pid, rid)).fetchone()
+            if not run:
+                raise NotFound("Run not found.")
+            c.execute("UPDATE runs SET scores=json_set(COALESCE(scores, '{}'), '$.outcome', ?), "
+                      "metadata=json_set(COALESCE(metadata, '{}'), '$.outcome_source', ?) WHERE project_id=? AND id=?",
+                      (int(ok), source, pid, rid))
+            example_id = None
+            if ok and p["settings"]["loop"]["auto_verify_outcomes"] and run["output"] is not None:
+                row = c.execute("SELECT id FROM datasets WHERE project_id=? AND name='eval'", (pid,)).fetchone()
+                did = row["id"] if row else uuid.uuid4().hex
+                if not row:
+                    c.execute("INSERT INTO datasets VALUES (?,?,?,0,?)", (did, pid, "eval", time.time()))
+                if not c.execute("SELECT 1 FROM dataset_examples WHERE dataset_id=? AND source_run_id=? AND "
+                                 "removed_in IS NULL", (did, rid)).fetchone():
+                    example_id = self._insert_examples(c, pid, did, [(run["input"], run["output"], dump(
+                        {"outcome_source": source}), 0)], "outcome", source_run_id=rid, split="dev")[0]
+            return {"run_id": rid, "ok": ok, "source": source, "example_id": example_id}
+
     def dataset_history(self, org, pid, did):
         with self._conn() as c:
             self._project(c, org, pid)
@@ -776,7 +962,8 @@ class DevStore:
             v = ev.get("dataset_version")
             if not isinstance(v, int) or not 0 <= v <= d["version"]:
                 raise ValidationError("dataset_version must be an existing version of the dataset")
-            want = {r["id"] for r in self._snapshot(c, d["id"], v)}
+            split = config.get("split")
+            want = {r["id"] for r in self._snapshot(c, d["id"], v, split)}
             results = ev.get("results")
             if not isinstance(results, list):
                 raise ValidationError("results must be a list")
@@ -864,6 +1051,9 @@ class DevStore:
                 raise ValidationError("The evaluations used different datasets or dataset versions; run both on "
                                       "the same snapshot.")
             same = lambda k: a["config"].get(k) == b["config"].get(k)
+            if not same("split"):
+                raise ValidationError("The evaluations used different splits of the dataset, so they are not "
+                                      "comparable.")
             if not same("trials") or sorted(map(json.dumps, a["config"]["scorers"])) != sorted(
                     map(json.dumps, b["config"]["scorers"])):
                 raise ValidationError("The evaluations used different scorers or trials, so they are not comparable.")
