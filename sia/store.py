@@ -58,17 +58,22 @@ CREATE TABLE IF NOT EXISTS access_requests (id TEXT PRIMARY KEY, email TEXT NOT 
     company TEXT NOT NULL DEFAULT '', use_case TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
     org_id TEXT, created REAL NOT NULL, decided REAL);
 CREATE INDEX IF NOT EXISTS idx_access_requests ON access_requests(status, email)
+"""), ("legacy-004-unique-playbook-versions", """
+UPDATE playbooks SET version = (SELECT COUNT(*) FROM playbooks p2 WHERE p2.agent_id=playbooks.agent_id
+    AND p2.id<=playbooks.id) WHERE agent_id IN (SELECT agent_id FROM playbooks GROUP BY agent_id, version
+    HAVING COUNT(*) > 1);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_playbooks_version ON playbooks(agent_id, version)
 """)]
 PAID_PERIOD_DAYS = 30  # one payment buys this many days of a paid plan
 
 # Starting hypotheses for a freemium plan, not validated prices. Enforced server-side in sia/api.py.
 PLANS = {
     "free": {"projects": 1, "runs_per_month": 10_000, "examples_per_dataset": 200, "retention_days": 14,
-             "overage": False},
+             "overage": False, "llm_calls_per_month": 500},
     "pro": {"projects": 10, "runs_per_month": 250_000, "examples_per_dataset": 5_000, "retention_days": 90,
-            "overage": True, "hard_cap": 2.0},
+            "overage": True, "hard_cap": 2.0, "llm_calls_per_month": 20_000},
     "team": {"projects": 100, "runs_per_month": 2_000_000, "examples_per_dataset": 50_000, "retention_days": 365,
-             "overage": True, "hard_cap": 2.0},
+             "overage": True, "hard_cap": 2.0, "llm_calls_per_month": 200_000},
 }
 # hard_cap: paid plans may go past their included runs up to this multiple. Overage isn't billed during the beta,
 # so without a cap a paid plan would be unlimited.
@@ -115,15 +120,21 @@ class Store:
         migrate(path, MIGRATIONS)
 
     @contextmanager
-    def _conn(self):
-        """One connection per call: commit on success, roll back on error, always close."""
-        with closing(sqlite3.connect(self.path, timeout=30)) as c:
+    def _conn(self, write=True):
+        """One connection per call: commit on success, roll back on error, always close. Writes take the lock up
+        front (BEGIN IMMEDIATE, like DevStore), so read-then-write sequences such as 'next version' can't race."""
+        with closing(sqlite3.connect(self.path, timeout=30, isolation_level=None)) as c:
             c.row_factory = sqlite3.Row
-            with c:
+            c.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+            try:
                 yield c
+                c.execute("COMMIT")
+            except BaseException:
+                c.execute("ROLLBACK")
+                raise
 
     def q(self, sql, *args):
-        with self._conn() as c:
+        with self._conn(write=False) as c:
             return [dict(r) for r in c.execute(sql, args)]
 
     def x(self, sql, *args):
@@ -153,6 +164,25 @@ class Store:
         rows = self.q(f"SELECT t.id, t.name, {self.PLAN_SQL} plan, t.paid_until, t.created FROM tenants t WHERE id=?",
                       time.time(), tenant_id)
         return rows[0] if rows else None
+
+    def delete_org(self, tenant_id):
+        """Delete an organization and everything it owns, in one transaction. Usage and payment rows are kept for
+        the books but anonymised: they no longer point at the organization, its agents or its projects."""
+        from sia_devtools.store import DevStore
+        with self._conn() as c:
+            if not c.execute("SELECT 1 FROM tenants WHERE id=?", (tenant_id,)).fetchone():
+                return False
+            for (pid,) in c.execute("SELECT id FROM projects WHERE org_id=?", (tenant_id,)).fetchall():
+                DevStore.purge_project(c, pid)
+            for (aid,) in c.execute("SELECT id FROM agents WHERE tenant_id=?", (tenant_id,)).fetchall():
+                self._purge_agent(c, aid)
+            c.execute("UPDATE usage SET tenant_id='deleted', agent_id=NULL, project_id=NULL WHERE tenant_id=?",
+                      (tenant_id,))
+            c.execute("UPDATE payments SET org_id='deleted' WHERE org_id=?", (tenant_id,))
+            for table in ("api_keys", "access_requests"):
+                c.execute(f"DELETE FROM {table} WHERE org_id=?", (tenant_id,))
+            c.execute("DELETE FROM tenants WHERE id=?", (tenant_id,))
+        return True
 
     def set_plan(self, tenant_id, plan):
         """Admin override: set a plan with no expiry."""
@@ -283,8 +313,12 @@ class Store:
 
     def delete_agent(self, agent_id):
         with self._conn() as c:
-            for table in ("agents", "playbooks", "docs", "chunks", "lessons", "lessons_fts", "episodes", "examples"):
-                c.execute(f"DELETE FROM {table} WHERE {'id' if table == 'agents' else 'agent_id'}=?", (agent_id,))
+            self._purge_agent(c, agent_id)
+
+    @staticmethod
+    def _purge_agent(c, agent_id):
+        for table in ("agents", "playbooks", "docs", "chunks", "lessons", "lessons_fts", "episodes", "examples"):
+            c.execute(f"DELETE FROM {table} WHERE {'id' if table == 'agents' else 'agent_id'}=?", (agent_id,))
 
     # --- knowledge -----------------------------------------------------------
     def add_doc(self, agent_id, title, content):
@@ -462,6 +496,10 @@ class Store:
         return {"requests": sum(r["requests"] for r in rows), "llm_calls": sum(r["llm_calls"] for r in rows),
                 "by_action": {r["action"]: {"requests": r["requests"], "llm_calls": r["llm_calls"],
                                             "units": r["units"]} for r in rows}}
+
+    def llm_calls_since(self, tenant_id, since):
+        return self.q("SELECT COALESCE(SUM(llm_calls), 0) n FROM usage WHERE tenant_id=? AND created>=?",
+                      tenant_id, since)[0]["n"]
 
     def units_since(self, tenant_id, action, since):
         return self.q("SELECT COALESCE(SUM(units), 0) n FROM usage WHERE tenant_id=? AND action=? AND created>=?",

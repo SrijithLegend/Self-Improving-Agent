@@ -61,10 +61,51 @@ def _luhn(digits):
     return (sum(d[0::2]) + sum(sum(divmod(2 * x, 10)) for x in d[1::2])) % 10 == 0
 
 
-def redactor(rules):
-    """Return fn(obj) that masks matches of the named rules (see REDACTORS) or custom regexes in every string."""
+def regex_problem(pattern, max_len=500):
+    """Why a user-supplied regex is unsafe to run on stored text, or None. The time-budget rule: Python's re has no
+    timeout, so patterns that can backtrack exponentially (a quantified group that itself contains a quantifier or
+    an alternation, like (a+)+ or (a|ab)*) are refused, and scanned text is capped at MAX_FIELD characters."""
+    if not isinstance(pattern, str) or not 0 < len(pattern) <= max_len:
+        return f"must be 1-{max_len} characters"
+    try:
+        parsed = re._parser.parse(pattern)
+    except re.error as e:
+        return f"invalid regex: {e}"
+    # ponytail: structural check only; polynomial backtracking (\d+\d+x on 64k digits) is still possible, a real
+    # timeout needs the third-party `regex` module or a subprocess.
+    repeats = {re._constants.MAX_REPEAT, re._constants.MIN_REPEAT, re._constants.POSSESSIVE_REPEAT}
+
+    def walk(items, under_repeat):
+        for op, av in items:
+            if op in repeats:
+                lo, hi, sub = av
+                if under_repeat and hi > 1:
+                    return "nested quantifiers can take exponential time"
+                if p := walk(sub, under_repeat or hi > 1):
+                    return p
+                if hi > 1 and any(o == re._constants.BRANCH or (o == re._constants.SUBPATTERN and
+                                  any(x == re._constants.BRANCH for x, _ in a[-1])) for o, a in sub):
+                    return "a quantified alternation can take exponential time"
+            elif op == re._constants.SUBPATTERN and (p := walk(av[-1], under_repeat)):
+                return p
+            elif op == re._constants.BRANCH:
+                for b in av[1]:
+                    if p := walk(b, under_repeat):
+                        return p
+        return None
+    return walk(parsed, False)
+
+
+def redactor(rules, custom=True):
+    """Return fn(obj) that masks matches of the named rules (see REDACTORS) or custom regexes in every string.
+    custom=False (the hosted server) skips custom patterns: only the named rules run there."""
     compiled = []
     for r in rules:
+        if r not in REDACTORS:
+            if not custom:
+                continue  # refused when hosted settings are written; an old stored one is never run
+            if problem := regex_problem(r):
+                raise ValidationError(f"Unsafe redaction pattern {r!r}: {problem}")
         try:
             compiled.append((r if r in REDACTORS else "custom", re.compile(REDACTORS.get(r, r))))
         except re.error as e:
@@ -81,6 +122,7 @@ def redactor(rules):
 
     def scrub(x):
         if isinstance(x, str):
+            x = x[:MAX_FIELD]  # longer text is truncated on storage anyway; never scan more than is kept
             for rx, fn in subs:
                 x = rx.sub(fn, x)
             return x
@@ -205,7 +247,9 @@ def validate_policy(p):
     return out
 
 
-def validate_settings(new, base=None):
+def validate_settings(new, base=None, custom=True, stored=False):
+    """custom=False (the hosted server) allows only named redaction rules. stored=True loads settings already in the
+    database without re-checking their patterns, so a project with an old pattern can still be read and fixed."""
     s = json.loads(json.dumps(base or DEFAULT_SETTINGS))
     if not isinstance(new, dict) or set(new) - set(DEFAULT_SETTINGS):
         raise ValidationError(f"settings keys must be among: {', '.join(DEFAULT_SETTINGS)}")
@@ -214,7 +258,11 @@ def validate_settings(new, base=None):
         if not isinstance(rules, list) or len(rules) > 20 or not all(isinstance(r, str) and 0 < len(r) <= 500
                                                                       for r in rules):
             raise ValidationError("redact must be a list of up to 20 rule names or regexes")
-        redactor(rules)  # raises on a bad regex
+        if not stored:
+            if not custom and (bad := [r for r in rules if r not in REDACTORS]):
+                raise ValidationError(f"Custom redaction patterns run only in local mode; on this server use the "
+                                      f"named rules ({', '.join(REDACTORS)}). Refused: {bad}")
+            redactor(rules)  # raises on a bad or unsafe regex
         s["redact"] = rules
     if "retention_days" in new:
         s["retention_days"] = _num(new["retention_days"], "retention_days", 1, 3650, integer=True)
@@ -229,8 +277,9 @@ def validate_settings(new, base=None):
 
 
 class DevStore:
-    def __init__(self, path="sia_local.db"):
-        self.path = path
+    def __init__(self, path="sia_local.db", custom_regex=True):
+        """custom_regex=False on the hosted server: custom redaction patterns are refused and never run there."""
+        self.path, self.custom_regex = path, custom_regex
         migrate(path, MIGRATIONS)
 
     @contextmanager
@@ -256,8 +305,14 @@ class DevStore:
     @staticmethod
     def _proj(row):
         p = dict(row)
-        p["settings"] = validate_settings(json.loads(p["settings"] or "{}"))
+        p["settings"] = validate_settings(json.loads(p["settings"] or "{}"), stored=True)
         return p
+
+    def _scrubber(self, org, pid):
+        """The project's redactor, built in its own short read: redaction runs before any write lock is taken, so a
+        slow pattern can never hold up other writers."""
+        with self._conn() as c:
+            return redactor(self._project(c, org, pid)["settings"]["redact"], self.custom_regex)
 
     def _project(self, c, org, pid):
         row = c.execute("SELECT * FROM projects WHERE id=? AND org_id=?", (pid, org)).fetchone()
@@ -275,7 +330,7 @@ class DevStore:
                 return self._proj(row)
             if not create:
                 raise NotFound("Project not found.")
-            s = validate_settings(settings or {})
+            s = validate_settings(settings or {}, custom=self.custom_regex)
             pid = uuid.uuid4().hex
             c.execute("INSERT INTO projects VALUES (?,?,?,?,?)", (pid, org, name, json.dumps(s), time.time()))
             self._audit(c, pid, actor, "project.create", {"name": name})
@@ -293,10 +348,28 @@ class DevStore:
         with self._conn() as c:
             return c.execute("SELECT COUNT(*) FROM projects WHERE org_id=?", (org,)).fetchone()[0]
 
+    # every table keyed by project_id; dataset_examples hang off datasets
+    PROJECT_TABLES = ("runs", "feedback", "evaluations", "eval_results", "comparisons", "versions", "active_versions",
+                      "audit")
+
+    @classmethod
+    def purge_project(cls, c, pid):
+        """Delete every row of a project on connection c (the caller's transaction)."""
+        c.execute("DELETE FROM dataset_examples WHERE dataset_id IN (SELECT id FROM datasets WHERE project_id=?)",
+                  (pid,))
+        for table in (*cls.PROJECT_TABLES, "datasets"):
+            c.execute(f"DELETE FROM {table} WHERE project_id=?", (pid,))
+        c.execute("DELETE FROM projects WHERE id=?", (pid,))
+
+    def delete_project(self, org, pid):
+        with self._conn(write=True) as c:
+            self._project(c, org, pid)
+            self.purge_project(c, pid)
+
     def update_project(self, org, pid, settings, actor=None):
         with self._conn(write=True) as c:
             p = self._project(c, org, pid)
-            s = validate_settings(settings, p["settings"])
+            s = validate_settings(settings, p["settings"], custom=self.custom_regex)
             c.execute("UPDATE projects SET settings=? WHERE id=?", (json.dumps(s), pid))
             self._audit(c, pid, actor, "project.settings", settings)
             return self._project(c, org, pid)
@@ -334,10 +407,10 @@ class DevStore:
         """Insert or update runs by id (idempotent: re-sending a run replaces it). Applies redaction and retention."""
         if not isinstance(runs, list):
             raise ValidationError("runs must be a list")
+        scrub = self._scrubber(org, pid)
+        rows = [self._run_row(pid, r, scrub) for r in runs]
         with self._conn(write=True) as c:
             p = self._project(c, org, pid)
-            scrub = redactor(p["settings"]["redact"])
-            rows = [self._run_row(pid, r, scrub) for r in runs]
             c.executemany("""INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(project_id, id) DO UPDATE SET parent_id=excluded.parent_id, name=excluded.name,
                 input=excluded.input, output=excluded.output, status=excluded.status, error=excluded.error,
@@ -435,14 +508,14 @@ class DevStore:
         if rating not in (-1, 1):
             raise ValidationError("rating must be 1 (good) or -1 (bad)")
         fid = _id(id, "feedback id") if id else uuid.uuid4().hex
+        scrub = self._scrubber(org, pid)
+        row = (dump(scrub(correction)) if correction is not None else None,
+               _text(category, "category", 100), scrub(_text(explanation, "explanation", 5000)),
+               _text(reviewer, "reviewer", 200))
         with self._conn(write=True) as c:
-            p = self._project(c, org, pid)
+            self._project(c, org, pid)
             if not c.execute("SELECT 1 FROM runs WHERE project_id=? AND id=?", (pid, run_id)).fetchone():
                 raise NotFound("Run not found.")
-            scrub = redactor(p["settings"]["redact"])
-            row = (dump(scrub(correction)) if correction is not None else None,
-                   _text(category, "category", 100), scrub(_text(explanation, "explanation", 5000)),
-                   _text(reviewer, "reviewer", 200))
             dup = c.execute("SELECT id FROM feedback WHERE project_id=? AND (id=? OR (run_id=? AND rating=? AND "
                             "correction IS ? AND category IS ? AND explanation IS ? AND reviewer IS ?))",
                             (pid, fid, run_id, rating, *row)).fetchone()
@@ -479,22 +552,29 @@ class DevStore:
         (or an edited expected_output) into a dataset example that links back to the run and the feedback."""
         if status not in ("verified", "rejected"):
             raise ValidationError("status must be 'verified' or 'rejected'")
+        scrub = self._scrubber(org, pid)
+        with self._conn() as c:
+            fb = self._feedback(c, pid, fid)
+        if fb["status"] != "pending":
+            raise Conflict(f"Feedback is already {fb['status']}.")
+        rows = None
+        if status == "verified" and dataset_id:
+            expected = expected_output if expected_output is not None else fb["correction"]
+            if expected is None:
+                raise ValidationError("This feedback has no correction; pass expected_output to verify it "
+                                      "into a dataset.")
+            rows = self._example_rows(scrub, [
+                {"input": fb["run_input"], "expected_output": expected, "critical": critical,
+                 "metadata": {"category": fb["category"], "explanation": fb["explanation"]}}])
         with self._conn(write=True) as c:
             self._project(c, org, pid)
-            fb = self._feedback(c, pid, fid)
-            if fb["status"] != "pending":
-                raise Conflict(f"Feedback is already {fb['status']}.")
+            if (now := self._feedback(c, pid, fid))["status"] != "pending":  # someone reviewed it meanwhile
+                raise Conflict(f"Feedback is already {now['status']}.")
             example_id = None
-            if status == "verified" and dataset_id:
-                expected = expected_output if expected_output is not None else fb["correction"]
-                if expected is None:
-                    raise ValidationError("This feedback has no correction; pass expected_output to verify it "
-                                          "into a dataset.")
+            if rows:
                 self._dataset(c, pid, dataset_id)
-                example_id = self._add_examples(c, pid, dataset_id, [
-                    {"input": fb["run_input"], "expected_output": expected, "critical": critical,
-                     "metadata": {"category": fb["category"], "explanation": fb["explanation"]}}],
-                    source="feedback", source_run_id=fb["run_id"], feedback_id=fid)[0]
+                example_id = self._insert_examples(c, pid, dataset_id, rows, source="feedback",
+                                                   source_run_id=fb["run_id"], feedback_id=fid)[0]
             c.execute("UPDATE feedback SET status=?, review_note=?, reviewed_by=?, reviewed=?, example_id=? "
                       "WHERE project_id=? AND id=?", (status, _text(note, "note", 2000), _text(reviewer, "reviewer",
                                                                                              200), time.time(),
@@ -563,16 +643,11 @@ class DevStore:
     def _bump(c, did):
         return c.execute("UPDATE datasets SET version=version+1 WHERE id=? RETURNING version", (did,)).fetchone()[0]
 
-    def _add_examples(self, c, pid, did, items, source="user", source_run_id=None, feedback_id=None, replaces=None):
-        return self._insert_examples(c, pid, did, self._example_rows(c, pid, items), source, source_run_id,
-                                     feedback_id, replaces)
-
-    def _example_rows(self, c, pid, items):
+    @staticmethod
+    def _example_rows(scrub, items):
         """Validate and redact examples into row tuples (input, expected, metadata, critical), as stored."""
         if not isinstance(items, list) or not items:
             raise ValidationError("examples must be a non-empty list")
-        scrub = redactor(self._proj(c.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone())
-                         ["settings"]["redact"])
         rows = []
         for i, ex in enumerate(items):
             if not isinstance(ex, dict) or ex.get("input") is None:
@@ -600,10 +675,10 @@ class DevStore:
         example, or an earlier one in the same batch, is skipped and its existing id returned: re-running a script
         must not count the same case twice in every evaluation. If everything is skipped, the version stays.
         max_examples (a plan limit) counts only what would really be added. Returns {"ids": [...], "skipped": n}."""
+        rows = self._example_rows(self._scrubber(org, pid), items)
         with self._conn(write=True) as c:
             self._project(c, org, pid)
             self._dataset(c, pid, did)
-            rows = self._example_rows(c, pid, items)
             live = c.execute("SELECT COUNT(*) FROM dataset_examples WHERE dataset_id=? AND removed_in IS NULL",
                              (did,)).fetchone()[0]
 
@@ -638,14 +713,19 @@ class DevStore:
 
     def update_example(self, org, pid, did, eid, fields):
         """Edits never change history: the old row is closed at the new version and a new row replaces it."""
+        scrub = self._scrubber(org, pid)
+        with self._conn() as c:
+            self._dataset(c, pid, did)
+            old = self._live_example(c, did, eid)
+        merged = {k: old[k] for k in ("input", "expected_output", "metadata", "critical")}
+        merged.update({k: v for k, v in fields.items() if v is not None})
+        rows = self._example_rows(scrub, [merged])
         with self._conn(write=True) as c:
             self._project(c, org, pid)
             self._dataset(c, pid, did)
-            old = self._live_example(c, did, eid)
-            merged = {k: old[k] for k in ("input", "expected_output", "metadata", "critical")}
-            merged.update({k: v for k, v in fields.items() if v is not None})
-            new_id = self._add_examples(c, pid, did, [merged], old["source"], old["source_run_id"],
-                                        old["feedback_id"], replaces=eid)[0]
+            self._live_example(c, did, eid)  # still live: not replaced or deleted since it was read
+            new_id = self._insert_examples(c, pid, did, rows, old["source"], old["source_run_id"],
+                                           old["feedback_id"], replaces=eid)[0]
             v = c.execute("SELECT version FROM datasets WHERE id=?", (did,)).fetchone()[0]
             c.execute("UPDATE dataset_examples SET removed_in=? WHERE id=?", (v, eid))
             return new_id

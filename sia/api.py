@@ -37,8 +37,8 @@ app = FastAPI(title="SIA DevTools API", version="0.1.0",
               description="A release gate for prompt changes: capture runs, verify feedback into "
                           "datasets, evaluate prompt versions and release them through an explicit approval step.")
 DB = os.getenv("SIA_DB", "sia.db")
-store, dev = Store(DB), DevStore(DB)
 LOCAL_MODE = os.getenv("SIA_LOCAL_MODE") == "1"
+store, dev = Store(DB), DevStore(DB, custom_regex=LOCAL_MODE)  # hosted: named redaction rules only
 MAX_BODY = sec.env_int("SIA_MAX_BODY_BYTES", 4 * 1024 * 1024)
 # Throttles (in-memory, per process: see sia/security.py). 0 turns one off.
 RATE_LIMIT = sec.env_int("SIA_RATE_LIMIT", 120)  # requests per organization per minute
@@ -249,9 +249,20 @@ def owned_agent(agent_id: str, t=Depends(tenant)):
     return a
 
 
+def llm_quota(org_id):
+    """Refuse (402) once the organization has used its plan's LLM calls for this month. Checked before an action
+    starts, so one action can run past the cap by its own calls."""
+    org = store.tenant(org_id)
+    lim = PLANS.get(org["plan"]) if org else None  # local mode has no tenant row: no limit
+    if lim and store.llm_calls_since(org_id, month_start()) >= lim["llm_calls_per_month"]:
+        raise QuotaExceeded(f"The {org['plan']} plan includes {lim['llm_calls_per_month']:,} LLM calls a month; "
+                            f"they reset on {next_month_start():%d %B %Y} (UTC).")
+
+
 def metered(request: Request, a, model, fn, *args):
     """Run an LLM-using action, record its LLM calls for billing (even if it fails), add llm_calls. Capped per
     organization and in total, since these hold a worker thread for as long as the model takes."""
+    llm_quota(a["tenant_id"])
     with llm_slots.take(a["tenant_id"]):
         try:
             return {**call(fn, *args), "llm_calls": model.calls}
@@ -529,6 +540,15 @@ def set_plan(org_id: str, body: PlanIn, request: Request, x_admin_key: str = Hea
     return {"org_id": org_id, "plan": body.plan, "limits": PLANS[body.plan]}
 
 
+@app.delete("/v1/admin/orgs/{org_id}", status_code=204)
+def delete_org(org_id: str, request: Request, x_admin_key: str = Header(default="")):
+    """Delete an organization and all its data in one transaction (usage and payments are kept, anonymised)."""
+    require_admin(request, x_admin_key)
+    if not store.delete_org(org_id):
+        raise HTTPException(404, "Organization not found.")
+    security_event(request, "org_deleted", org_id=org_id)
+
+
 # --- access requests: manual onboarding until there is self-serve signup ----------------
 @app.post("/v1/access-requests", status_code=202)
 def request_access(body: AccessRequestIn, request: Request):
@@ -721,6 +741,13 @@ def get_project(project_id: str, t=Depends(tenant)):
 @app.patch("/v1/projects/{project_id}")
 def update_project(project_id: str, body: ProjectPatch, t=Depends(tenant)):
     return dev.update_project(t["id"], project_id, body.settings, actor=actor(t))
+
+
+@app.delete("/v1/projects/{project_id}", status_code=204)
+def delete_project(project_id: str, t=Depends(tenant)):
+    """Delete the project and every run, feedback item, dataset, evaluation, version and audit row in it."""
+    dev.delete_project(t["id"], project_id)
+    store.x("UPDATE usage SET project_id=NULL WHERE project_id=?", project_id)  # usage stays, anonymised
 
 
 @app.get("/v1/projects/{project_id}/overview")

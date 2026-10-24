@@ -167,6 +167,11 @@ def doctor(db, backup_dir="backups", now=None):
         "set" if cfg["webhook_secret"] else "unset: the webhook refuses every event")
 
     add(*_db_check(db))
+    if env.get("SIA_DEFAULT_LLM_KEY"):  # one server key paying for every organization's model calls
+        orgs = _count_orgs(db)
+        add("FAIL" if orgs > 1 else "WARN", "SIA_DEFAULT_LLM_KEY", f"set while {orgs} organizations exist: every "
+            "organization's model calls go to your key; unset it and have callers send X-LLM-Key"
+            if orgs > 1 else "set: fine for a single-organization self-hosted server")
     recent = [p for p in backups(backup_dir) if now - p.stat().st_mtime < BACKUP_MAX_AGE_HOURS * 3600]         if Path(backup_dir).is_dir() else []
     add("PASS" if recent else "FAIL", "Backups", f"newest: {recent[-1].name}" if recent else
         f"no backup in {backup_dir} from the last {BACKUP_MAX_AGE_HOURS} hours (schedule `sia backup`)")
@@ -175,6 +180,14 @@ def doctor(db, backup_dir="backups", now=None):
         "(set SIA_PRICE_PRO_PAISE / SIA_PRICE_TEAM_PAISE)" if placeholder else
         f"pro {cfg['prices']['pro']}, team {cfg['prices']['team']} ({cfg['currency']}, smallest unit)")
     return out
+
+
+def _count_orgs(db):
+    try:
+        with closing(sqlite3.connect(f"file:{Path(db).resolve().as_posix()}?mode=ro", uri=True)) as c:
+            return c.execute("SELECT COUNT(*) FROM tenants").fetchone()[0]
+    except sqlite3.Error:
+        return 0
 
 
 def _db_check(db):
