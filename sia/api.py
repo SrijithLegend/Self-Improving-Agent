@@ -1,10 +1,12 @@
-"""HTTP API: SIA DevTools (projects, runs, feedback, datasets, evaluations, versions) and the managed agents API.
+"""HTTP API: SIA DevTools (projects, runs, feedback, datasets, evaluations, versions) and the self-improving loop
+(hosted agents, jobs, canaries).
 
 Auth:  Authorization: Bearer <sia api key>. "full" keys can do everything in their organization; "ingest" keys
        (for production apps) can only send runs and feedback and read the active prompt.
-LLM:   only the managed agents routes call a model, with the caller's own key: X-LLM-Provider, X-LLM-Key,
-       optional X-LLM-Model, X-LLM-Base-URL. Keys sent in X-LLM-Key are used for the request only and never stored.
-       DevTools routes never send your data to a model provider.
+LLM:   only hosted-agent tasks (POST /v1/projects/{id}/tasks) call a model during a request, with the caller's
+       key (X-LLM-Provider + X-LLM-Key, used for that request only and never stored) or the server's
+       SIA_LLM_KEY_<PROVIDER>. Background loop jobs use the server's key. DevTools routes never send your data to a
+       model provider.
 Local: SIA_LOCAL_MODE=1 (used by `sia dashboard`) skips keys and serves the local org, to loopback clients only.
 """
 import csv
@@ -32,7 +34,6 @@ from sia_loop import jobs
 
 from . import billing
 from . import security as sec
-from . import agent as legacy
 from . import ops
 from .llm import LLMError
 from .store import PAID_PERIOD_DAYS, PLANS, Store
@@ -43,7 +44,7 @@ app = FastAPI(title="SIA DevTools API", version="0.1.0",
 DB = os.getenv("SIA_DB", "sia.db")
 LOCAL_MODE = os.getenv("SIA_LOCAL_MODE") == "1"
 store, dev = Store(DB), DevStore(DB, custom_regex=LOCAL_MODE)  # hosted: named redaction rules only
-ops.auto_migrate_agents(DB)  # managed agents become kind="agent" projects, once
+ops.finish_legacy(DB)  # managed agents became kind="agent" projects; their old tables are dropped once copied
 MAX_BODY = sec.env_int("SIA_MAX_BODY_BYTES", 4 * 1024 * 1024)
 # Throttles (in-memory, per process: see sia/security.py). 0 turns one off.
 RATE_LIMIT = sec.env_int("SIA_RATE_LIMIT", 120)  # requests per organization per minute
@@ -250,13 +251,6 @@ def caller_key(org, pid, x_llm_provider, x_llm_key):
     return x_llm_key
 
 
-def owned_agent(agent_id: str, t=Depends(tenant), x_llm_provider: str = Header(default=""),
-                x_llm_key: str = Header(default="")):
-    a = legacy.Agent(dev, t["id"], agent_id)  # NotFound (404) for another org's id
-    a.key = caller_key(t["id"], agent_id, x_llm_provider, x_llm_key)
-    return a
-
-
 def llm_quota(org_id):
     """Refuse (402) once the organization has used its plan's LLM calls for this month. Checked before an action
     starts, so one action can run past the cap by its own calls."""
@@ -265,20 +259,6 @@ def llm_quota(org_id):
     if lim and store.llm_calls_since(org_id, month_start()) >= lim["llm_calls_per_month"]:
         raise QuotaExceeded(f"The {org['plan']} plan includes {lim['llm_calls_per_month']:,} LLM calls a month; "
                             f"they reset on {next_month_start():%d %B %Y} (UTC).")
-
-
-def metered(request: Request, a, fn, *args):
-    """Run an LLM-using action and record its LLM calls for billing. Capped per organization and in total, since
-    these hold a worker thread for as long as the model takes."""
-    llm_quota(a.org)
-    out = {}
-    with llm_slots.take(a.org):
-        try:
-            out = call(fn, *args)
-            return out
-        finally:
-            store.record_usage(a.org, a.id, request.url.path.rsplit("/", 1)[-1], out.get("llm_calls", 0),
-                               project_id=a.id)
 
 
 def call(fn, *args, **kwargs):
@@ -293,7 +273,7 @@ def call(fn, *args, **kwargs):
         raise HTTPException(400, str(e))
 
 
-# --- request bodies: managed agents -------------------------------------------
+# --- request bodies: service ------------------------------------------------------
 class TenantIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
 
@@ -307,58 +287,9 @@ class AccessRequestIn(BaseModel):
     website: str = Field("", max_length=500, description="Leave empty. It's hidden on the form: bots fill it in.")
 
 
-class AgentIn(BaseModel):
-    name: str = Field(min_length=1, max_length=200)
-    domain: str = Field(min_length=1, max_length=500, description="e.g. 'Indian income-tax advisory'")
-    instructions: str = Field("", max_length=20000, description="Role, tone, constraints, output format.")
-    rubric: str = Field("", max_length=5000, description="What a great answer looks like; used for self-grading.")
-
-
-class AgentPatch(BaseModel):
-    name: str | None = Field(None, max_length=200)
-    domain: str | None = Field(None, max_length=500)
-    instructions: str | None = Field(None, max_length=20000)
-    rubric: str | None = Field(None, max_length=5000)
-
-
 class DocIn(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     content: str = Field(min_length=1, max_length=2_000_000)
-
-
-class ExampleIn(BaseModel):
-    input: str = Field(min_length=1, max_length=20000)
-    expected: str = Field(min_length=1, max_length=20000, description="Reference answer or grading notes.")
-
-
-class RunIn(BaseModel):
-    task: str = Field(min_length=1, max_length=20000)
-    learn: bool = Field(True, description="Self-critique, revise and learn. False = one fast call, no learning.")
-    max_revisions: int = Field(2, ge=0, le=5)
-
-
-class FeedbackIn(BaseModel):
-    episode_id: str
-    rating: int = Field(ge=1, le=5)
-    correction: str | None = Field(None, max_length=20000, description="The answer it should have given. Stored "
-                                                                       "as a pending example until verified.")
-    comment: str | None = Field(None, max_length=5000)
-
-
-class StudyIn(BaseModel):
-    rounds: int = Field(3, ge=1, le=20)
-
-
-class EvaluateIn(BaseModel):
-    max_examples: int = Field(8, ge=1, le=30)
-    trials: int = Field(1, ge=1, le=3)
-
-
-class ImproveIn(BaseModel):
-    max_examples: int = Field(8, ge=1, le=30)
-    trials: int = Field(1, ge=1, le=3, description="Answers per example and playbook, averaged; more = less noise.")
-    activate: bool = Field(False, description="Activate the candidate if the verdict is 'improved'. Otherwise it is "
-                                              "only stored; activate it later with /playbooks/{version}/activate.")
 
 
 # --- request bodies: DevTools --------------------------------------------------
@@ -769,7 +700,11 @@ def create_project(body: ProjectIn, t=Depends(key_auth)):
     if full and lim and not any(p["name"] == body.name for p in dev.projects(t["id"])) \
             and dev.count_projects(t["id"]) >= lim["projects"]:
         raise QuotaExceeded(f"The {t['plan']} plan includes {lim['projects']} project(s).")
-    return dev.create_project(t["id"], body.name, body.settings, create=full, actor=actor(t))
+    p = dev.create_project(t["id"], body.name, body.settings, create=full, actor=actor(t))
+    if full and p["settings"]["kind"] == "agent":
+        from sia_loop import config
+        config.bootstrap(dev, t["id"], p["id"], actor(t))  # a hosted agent can take tasks right away
+    return p
 
 
 @app.get("/v1/projects")
@@ -958,6 +893,7 @@ def run_project_task(project_id: str, body: TaskIn, t=Depends(tenant), x_llm_pro
                      x_llm_key: str = Header(default="")):
     """Run one task with the agent's active config, recorded as a run. The model is the one the config names: send
     X-LLM-Provider (matching it) and X-LLM-Key to use your own key, or the server's key for that provider is used."""
+    dev.project(t["id"], project_id)  # another org's (or a missing) project is a 404 before anything is metered
     llm_quota(t["id"])
     key = caller_key(t["id"], project_id, x_llm_provider, x_llm_key)
     out = {"llm_calls": 0}
@@ -1201,136 +1137,6 @@ def start_canary(project_id: str, name: str, version: int, body: CanaryIn, t=Dep
 @app.post("/v1/projects/{project_id}/versions/{name}/{version}/activate")
 def activate_version(project_id: str, name: str, version: int, body: ActivateIn, t=Depends(tenant)):
     return dev.activate(t["id"], project_id, name, version, actor(t, body.reviewer))
-
-
-# --- managed agents (deprecated aliases over kind="agent" projects; removed in a later release) ----------------
-def agent_limits(t):
-    lim = limits(t)
-    return lim["projects"] if lim else None
-
-
-@app.post("/v1/agents", status_code=201, deprecated=True)
-def create_agent(body: AgentIn, t=Depends(tenant)):
-    return legacy.create(dev, t["id"], body.name, body.domain, body.instructions, body.rubric, by=actor(t),
-                         max_projects=agent_limits(t))
-
-
-@app.get("/v1/agents", deprecated=True)
-def list_agents(t=Depends(tenant)):
-    return legacy.agents(dev, t["id"])
-
-
-@app.get("/v1/agents/{agent_id}", deprecated=True)
-def get_agent(a=Depends(owned_agent)):
-    return {**a.shape(), "stats": a.stats(), "playbook": a.playbook()}
-
-
-@app.patch("/v1/agents/{agent_id}", deprecated=True)
-def update_agent(body: AgentPatch, a=Depends(owned_agent), t=Depends(tenant)):
-    return a.update(by=actor(t), **body.model_dump())
-
-
-@app.delete("/v1/agents/{agent_id}", status_code=204, deprecated=True)
-def delete_agent(a=Depends(owned_agent)):
-    dev.delete_project(a.org, a.id)
-    store.x("UPDATE usage SET project_id=NULL WHERE project_id=?", a.id)
-
-
-@app.post("/v1/agents/{agent_id}/knowledge", status_code=201, deprecated=True)
-def add_knowledge(body: DocIn, a=Depends(owned_agent)):
-    return dev.add_knowledge(a.org, a.id, body.title, body.content)
-
-
-@app.get("/v1/agents/{agent_id}/knowledge", deprecated=True)
-def list_knowledge(a=Depends(owned_agent)):
-    return dev.knowledge_docs(a.org, a.id)
-
-
-@app.delete("/v1/agents/{agent_id}/knowledge/{doc_id}", status_code=204, deprecated=True)
-def delete_knowledge(doc_id: str, a=Depends(owned_agent)):
-    dev.delete_knowledge(a.org, a.id, doc_id)
-
-
-@app.post("/v1/agents/{agent_id}/examples", status_code=201, deprecated=True)
-def add_example(body: ExampleIn, a=Depends(owned_agent)):
-    return {"id": a.add_example(body.input, body.expected)}
-
-
-@app.get("/v1/agents/{agent_id}/examples", deprecated=True)
-def list_examples(include_unverified: bool = False, a=Depends(owned_agent)):
-    return a.examples(include_unverified)
-
-
-@app.post("/v1/agents/{agent_id}/examples/{example_id}/verify", deprecated=True)
-def verify_example(example_id: int, request: Request, a=Depends(owned_agent)):
-    """Accept a pending correction: it joins the tests, and the agent takes lessons from it (in probation)."""
-    return metered(request, a, a.verify_example, example_id)
-
-
-@app.post("/v1/agents/{agent_id}/examples/{example_id}/reject", deprecated=True)
-def reject_example(example_id: int, a=Depends(owned_agent)):
-    return a.reject_example(example_id)
-
-
-@app.delete("/v1/agents/{agent_id}/examples/{example_id}", status_code=204, deprecated=True)
-def delete_example(example_id: int, a=Depends(owned_agent)):
-    a.delete_example(example_id)
-
-
-@app.post("/v1/agents/{agent_id}/run", deprecated=True)
-def run(body: RunIn, request: Request, a=Depends(owned_agent)):
-    """Use POST /v1/projects/{id}/tasks instead."""
-    return metered(request, a, a.run, body.task, body.learn)
-
-
-@app.post("/v1/agents/{agent_id}/feedback", deprecated=True)
-def feedback(body: FeedbackIn, request: Request, a=Depends(owned_agent)):
-    return metered(request, a, a.feedback, body.episode_id, body.rating, body.correction, body.comment)
-
-
-@app.post("/v1/agents/{agent_id}/study", status_code=202, deprecated=True)
-def study(body: StudyIn, a=Depends(owned_agent)):
-    """Queued: practice questions from the documents become pending examples. GET /v1/jobs/{job_id} for the result."""
-    return a.study(body.rounds)
-
-
-@app.post("/v1/agents/{agent_id}/evaluate", status_code=202, deprecated=True)
-def evaluate(body: EvaluateIn, a=Depends(owned_agent)):
-    """Queued: scores the active config on the eval set with the project's scorers (never self-graded)."""
-    return a.evaluate(body.trials)
-
-
-@app.post("/v1/agents/{agent_id}/improve", status_code=202, deprecated=True)
-def improve(body: ImproveIn, a=Depends(owned_agent), t=Depends(tenant)):
-    """Queued: one improvement cycle. With activate, a winner that passes the holdout and every rule is released."""
-    return a.improve(body.trials, body.activate, by=actor(t))
-
-
-@app.get("/v1/agents/{agent_id}/lessons", deprecated=True)
-def list_lessons(include_inactive: bool = False, a=Depends(owned_agent)):
-    return a.lessons(include_inactive)
-
-
-@app.post("/v1/agents/{agent_id}/lessons/{lesson_id}/{action}", deprecated=True)
-def toggle_lesson(lesson_id: int, action: str, a=Depends(owned_agent), t=Depends(tenant)):
-    if action not in ("enable", "disable"):
-        raise HTTPException(404, "Use /enable or /disable.")
-    return a.set_lesson(lesson_id, action == "enable", actor(t))
-
-
-@app.get("/v1/agents/{agent_id}/episodes", deprecated=True)
-def list_episodes(limit: int = 50, a=Depends(owned_agent)):
-    return a.episodes(min(max(limit, 1), 200))
-
-
-@app.get("/v1/agents/{agent_id}/playbooks", deprecated=True)
-def list_playbooks(a=Depends(owned_agent)):
-    return a.playbooks()
-
-
-@app.post("/v1/agents/{agent_id}/playbooks/{version}/activate", deprecated=True)
-def activate_playbook(version: int, a=Depends(owned_agent), t=Depends(tenant)):
-    return a.activate_playbook(version, actor(t))
 
 
 # The landing page. Mounted last: routes registered above (/docs, /health, /v1/*, /dashboard) take priority.

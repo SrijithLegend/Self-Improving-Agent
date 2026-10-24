@@ -187,6 +187,18 @@ def validate_validator(v):
                           '"schema"}')
 
 
+def bootstrap(dev, org, pid, actor=None):
+    """A new hosted agent's first config: its instructions as the system prompt, approved and active (there is
+    nothing to compare it with yet). Does nothing if the project already has an active agent_config."""
+    if dev.active_version(org, pid, CONFIG_NAME):
+        return None
+    agent = dev.project(org, pid)["settings"]["agent"] or {}
+    v = dev.create_version(org, pid, dumps(default_config(system_prompt=agent.get("instructions", ""))),
+                           name=CONFIG_NAME, note="initial config", actor=actor)["version"]
+    dev.approve(org, pid, CONFIG_NAME, v, actor=actor)
+    return dev.activate(org, pid, CONFIG_NAME, v, actor=actor)
+
+
 # --- diff --------------------------------------------------------------------------------------------------------
 def _bullets(text):
     return [line.strip() for line in text.splitlines() if re.match(r"^\s*(?:[-*•]|\d+[.)])\s+", line)]

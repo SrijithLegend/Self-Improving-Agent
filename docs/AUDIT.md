@@ -64,3 +64,31 @@ rules are tested, but these must be addressed before hosting paying customers:
   wording as terms section 7; refunds are issued by hand from the Razorpay dashboard.
 - Only a synchronous Python SDK. No async support, no framework adapters (LangChain, LlamaIndex, ...).
 - The gate can only protect behaviour that the developer's dataset and target function exercise.
+
+## 4. The self-improving loop (SELF_IMPROVING_SPEC.md, 2026-10-25)
+
+The managed agents became `kind="agent"` projects that improve themselves through `sia_loop`, behind the same
+release gate as everything else. `sia/agent.py`, `/v1/agents/*` and the managed-agent tables are gone (migration
+`legacy-005` copies their data, `legacy-006` drops the tables and refuses to while uncopied rows remain).
+
+**New trust boundaries**
+
+| Boundary | Who can cross it | What stops abuse |
+|---|---|---|
+| Outcome endpoint (`POST /runs/{id}/outcome`) | ingest and full keys: the customer's own system | Only a bool and a 100-character source. An outcome can auto-verify a run into the **dev** split, never the holdout, and only with `auto_verify_outcomes` on, so a forged outcome can teach but can't pass the gate. |
+| Webhooks (`loop.webhook_url`) | the server, calling out | https only, public addresses only (resolved before the request), no redirects, 5 s timeout; every delivery is HMAC-SHA256 signed with a per-project secret plus a timestamp, so receivers can reject forgeries and replays. |
+| Agent-made tools (macros) | the optimizer (a model) | Data, not code: prompt templates filled by a regex (never `str.format`), and pipelines of up to 5 built-in tools with no loops. Locked text is required in every prompt template. Validated on every config write. |
+| `http_get` tool | the actor (a model) | Off by default; `allowed_tools` and a host allowlist must both opt in; https, public addresses, no redirects, 100 KB. The address is checked, not pinned, before the request (DNS rebinding between the two is possible: see the `ponytail:` note). |
+| Canary traffic | the loop (autonomy 2-3) or a person | Only approved versions; at most 50%; any metric worse at z > 2 rolls it back; a 48-hour watch after promotion; pause stops every canary at once. |
+| Lessons from production text | reflection (a model reading user tasks) | Stored in probation only, never in a prompt until a holdout-tested config pins them; instruction-override patterns, URLs, emails, code and copied task text are dropped before storage. |
+| Self-grading | the actor | Never a promotion signal (G1): deterministic scorers decide, a judge must be a different model, self-critique is a runtime score only. |
+| The holdout split | the optimizer | Optimizer evidence comes from the dev split and live signals only, and anything about a holdout input is filtered out even when it arrives through production runs or feedback (G2, tested by capturing every prompt). |
+
+**Still client-trusted**
+
+- `kind="app"` evaluations are computed by the SDK where your code runs (`sia loop run --target`) and uploaded, as
+  before: a full-scope key holder can upload fabricated scores for their own project. The server re-checks
+  completeness, policy and locked text, not the scores themselves.
+- `reviewer` and `actor` names are self-reported; the loop's own actions are audited as `sia-loop`.
+- Background jobs use the server's model keys (`SIA_LLM_KEY_<PROVIDER>`); their calls count against the
+  organization's monthly `llm_calls` quota, enforced before every job and capped inside it.

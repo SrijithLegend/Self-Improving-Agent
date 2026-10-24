@@ -181,14 +181,16 @@ def test_offline_actor_answers_the_demo_cases_with_tools(tmp_path, monkeypatch):
                  validators=[{"type": "regex", "name": "decision", "pattern": r"^DECISION: (YES|NO)\."}])
     v = c.post(f"/v1/projects/{pid}/versions", json={"name": "agent_config", "content": json.dumps(bundle)},
                headers=h).json()
-    c.post(f"/v1/projects/{pid}/versions/agent_config/{v['version']}/approve", json={}, headers=h)
+    assert v["version"] == 2  # @1 is the config every new hosted agent starts with
+    c.post(f"/v1/projects/{pid}/versions/agent_config/{v['version']}/approve",
+           json={"override_reason": "set up by hand for this test"}, headers=h)
     c.post(f"/v1/projects/{pid}/versions/agent_config/{v['version']}/activate", json={}, headers=h)
 
     for task, want in CASES.items():
         r = c.post(f"/v1/projects/{pid}/tasks", json={"task": task, "revise": False}, headers=h)
         assert r.status_code == 200, r.text
         out = r.json()
-        assert out["answer"] == want and out["checks"] == {"validator:decision": 1} and out["version"] == 1
+        assert out["answer"] == want and out["checks"] == {"validator:decision": 1} and out["version"] == 2
         assert out["tools_used"][0] == "search_knowledge"
         assert ("calculator" in out["tools_used"]) == ("YES" in want)
         run = c.get(f"/v1/projects/{pid}/runs/{out['run_id']}", headers=h).json()

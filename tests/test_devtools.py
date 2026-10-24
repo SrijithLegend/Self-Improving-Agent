@@ -546,7 +546,8 @@ def test_key_scopes_revocation_and_rotation(tmp_path, monkeypatch):
     for method, path in (("get", f"/v1/projects/{pid}/runs"), ("post", f"/v1/projects/{pid}/versions"),
                          ("post", f"/v1/projects/{pid}/versions/system_prompt/{v['version']}/approve"),
                          ("post", f"/v1/projects/{pid}/versions/system_prompt/{v['version']}/activate"),
-                         ("get", "/v1/keys"), ("post", "/v1/agents")):
+                         ("get", "/v1/keys"), ("post", f"/v1/projects/{pid}/tasks"),
+                         ("post", f"/v1/projects/{pid}/loop/run"), ("post", f"/v1/projects/{pid}/loop/pause")):
         assert c.request(method, path, json={"content": "x"} if method == "post" else None,
                          headers=hi).status_code == 403, path
     keys = c.get("/v1/keys", headers=hf).json()

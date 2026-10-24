@@ -26,7 +26,10 @@ Include what you found, how to reproduce it and the impact. You should get an an
 | Host-header attacks | Optional Host allowlist (`SIA_ALLOWED_HOSTS`) | `sia/api.py` |
 | Server-side request forgery | Callers can't choose an LLM base URL unless the server opts in (`SIA_ALLOW_CUSTOM_BASE_URL=1`); model names are validated before they go into URLs; redirects are not followed | `sia/llm.py` |
 | Key leakage through errors | Provider error messages are scrubbed of the caller's model key; internal errors return only a request id, and the stack trace stays in the server log | `sia/llm.py`, `guard_and_log` |
-| Prompt injection through feedback | Corrections stay pending until a person verifies them; rejected feedback is never used; locked text can't be removed by a candidate | `sia_devtools/store.py`, `sia/agent.py` |
+| Prompt injection through feedback | Corrections stay pending until a person verifies them; rejected feedback is never used; locked text can't be removed by a candidate | `sia_devtools/store.py` |
+| Prompt injection into the self-improving loop | Lessons wait in probation and are scrubbed of instruction overrides, URLs, emails and code; only a config that wins on held-out cases (never seen by the optimizer) and survives a live canary reaches production; the agent can't grade itself | `sia_loop/memory.py`, `sia_loop/promoter.py`, `docs/AUDIT.md` section 4 |
+| Agent-made tools running code | Macros are data: regex-filled templates and pipelines of built-in tools; nothing the agent writes is executed | `sia_loop/tools/macro.py` |
+| Forged webhooks | Deliveries are HMAC-SHA256 signed (`X-SIA-Signature`) with a per-project secret and a timestamp | `sia_loop/notify.py` |
 | Personal data in stored runs | Redaction (secrets, including GitHub, Slack, AWS and Razorpay live keys; cards; and opt-in email, phone, Aadhaar, PAN and your own patterns) runs in the SDK before data leaves your app and again on the server | `sia_devtools/store.py` |
 | The keyless local mode leaking onto the network | It answers only loopback clients addressed as localhost, refuses requests that came through a proxy, and `sia dashboard` binds to 127.0.0.1 | `key_auth` |
 | SQL injection | All values are bound parameters; the few dynamic SQL fragments are fixed strings or whitelisted column names | `bandit` in CI |
@@ -60,9 +63,9 @@ Do these before you put the server on the internet:
   Redis.
 - **SQLite is a single-machine database.** Run one instance per database file. Moving to Postgres is the step that
   lets you run several instances behind a load balancer.
-- **Model calls are synchronous.** `study` and `improve` can take minutes. The concurrency caps protect the server,
-  but behind a proxy with a short timeout these calls will fail; raise the proxy's read timeout for `/v1/agents/`
-  (the nginx example does), or move them to a job queue.
+- **Long model work runs in jobs.** Improvement cycles, evaluations, study and canary checks run in `sia worker`,
+  not in requests. Only `POST /v1/projects/{id}/tasks` calls a model inside a request; behind a proxy with a short
+  timeout, raise its read timeout for that path.
 
 ## Not covered
 

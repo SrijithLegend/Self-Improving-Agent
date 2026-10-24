@@ -66,7 +66,8 @@ def _rows_for(db, org_id, ids):
     with sqlite3.connect(db) as c:
         tables = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND sql NOT LIKE "
                                           "'CREATE VIRTUAL%' AND name NOT LIKE '%fts%' AND name NOT LIKE 'chunks%'")]
-        tables += ["chunks", "lessons_fts"]
+        tables += [t for t in ("chunks", "lessons_fts", "knowledge") if c.execute(
+            "SELECT 1 FROM sqlite_master WHERE name=?", (t,)).fetchone()]
         for t in tables:
             cols = [r[1] for r in c.execute(f"PRAGMA table_info({t})")]
             for col in cols:
@@ -95,16 +96,13 @@ def test_delete_org_leaves_no_rows(tmp_path, monkeypatch):
     c.post(f"/v1/projects/{pid}/datasets/{did}/examples", json={"examples": [{"input": "q", "expected_output": "y"}]},
            headers=h)
     c.post(f"/v1/projects/{pid}/versions", json={"content": "v1"}, headers=h)
-    aid = c.post("/v1/agents", json={"name": "a", "domain": "d"}, headers=h).json()["id"]  # a kind=agent project
-    c.post(f"/v1/agents/{aid}/knowledge", json={"title": "t", "content": "facts"}, headers=h)
-    c.post(f"/v1/agents/{aid}/examples", json={"input": "q", "expected": "a"}, headers=h)
+    aid = c.post("/v1/projects", json={"name": "agent", "settings": {"kind": "agent"}}, headers=h).json()["id"]
+    c.post(f"/v1/projects/{aid}/knowledge", json={"title": "t", "content": "facts"}, headers=h)
+    c.post(f"/v1/projects/{aid}/tables", json={"name": "t", "rows": [{"a": 1}]}, headers=h)
     api.dev.add_lesson(a["tenant_id"], aid, "Always cite the rule.", "test")
-    old = api.store.create_agent(a["tenant_id"], "legacy", "d")["id"]  # rows in the managed-agents tables too
-    api.store.add_doc(old, "t", "facts")
-    api.store.add_example(old, "q", "a", "user")
-    api.store.add_lesson(old, "Always cite the rule.", "test")
-    api.store.add_playbook(old, "pb", 0.5, True)
-    api.store.add_episode(old, "t", "a", 0.5, {}, 1, [])
+    from sia_loop import jobs, notify
+    jobs.enqueue(api.dev, a["tenant_id"], aid, "noop")
+    notify.secret(api.dev, a["tenant_id"], aid)
     api.store.add_payment("order_1", a["tenant_id"], "pro", 100, "INR")
     other = {"Authorization": f"Bearer {b['api_key']}"}
     keep = c.post("/v1/projects", json={"name": "p"}, headers=other).json()["id"]
@@ -112,7 +110,7 @@ def test_delete_org_leaves_no_rows(tmp_path, monkeypatch):
     assert c.delete(f"/v1/admin/orgs/{a['tenant_id']}").status_code == 403
     assert c.delete(f"/v1/admin/orgs/{a['tenant_id']}", headers=ADMIN_H).status_code == 204
     assert c.delete(f"/v1/admin/orgs/{a['tenant_id']}", headers=ADMIN_H).status_code == 404
-    assert _rows_for(api.DB, a["tenant_id"], [pid, aid, did, old]) == {}
+    assert _rows_for(api.DB, a["tenant_id"], [pid, aid, did]) == {}
     assert c.get("/v1/me", headers=h).status_code == 401
     assert api.store.q("SELECT COUNT(*) n FROM usage WHERE tenant_id='deleted'")[0]["n"] > 0  # kept, anonymised
     assert c.get(f"/v1/projects/{keep}", headers=other).status_code == 200  # the other org is untouched
@@ -135,10 +133,10 @@ def test_llm_quota_returns_402(tmp_path, monkeypatch):
     monkeypatch.setattr(models, "factory", FakeLLM)
     monkeypatch.setitem(api.PLANS, "free", {**api.PLANS["free"], "llm_calls_per_month": 3})
     h = {"Authorization": f"Bearer {org(c)['api_key']}", "X-LLM-Key": "x"}
-    aid = c.post("/v1/agents", json={"name": "a", "domain": "d"}, headers=h).json()["id"]
-    first = c.post(f"/v1/agents/{aid}/run", json={"task": "q"}, headers=h)
+    aid = c.post("/v1/projects", json={"name": "a", "settings": {"kind": "agent"}}, headers=h).json()["id"]
+    first = c.post(f"/v1/projects/{aid}/tasks", json={"task": "q"}, headers=h)
     assert first.status_code == 200 and first.json()["llm_calls"] >= 3
-    r = c.post(f"/v1/agents/{aid}/run", json={"task": "q"}, headers=h)
+    r = c.post(f"/v1/projects/{aid}/tasks", json={"task": "q"}, headers=h)
     assert r.status_code == 402 and "LLM calls" in r.json()["detail"]
 
 
@@ -156,23 +154,24 @@ def test_doctor_fails_on_shared_default_llm_key(tmp_path, monkeypatch):
 
 # --- S4 ---------------------------------------------------------------------------------------------------------
 def test_concurrent_add_playbook_unique(tmp_path):
-    st = Store(str(tmp_path / "c.db"))
-    aid = st.create_agent("t", "a", "d")["id"]
+    """Playbooks are agent_config versions now: 4 writers x 150 versions must get 600 distinct numbers."""
+    dev = DevStore(str(tmp_path / "c.db"))
+    pid = dev.create_project(LOCAL_ORG, "p")["id"]
     errors = []
 
-    def work():
+    def work(i):
         try:
-            for _ in range(150):
-                st.add_playbook(aid, "pb", None, False)
+            for n in range(150):
+                dev.create_version(LOCAL_ORG, pid, f"pb {i}.{n}")
         except Exception as e:  # noqa: BLE001 - surfaced by the assertion below
             errors.append(e)
 
-    threads = [threading.Thread(target=work) for _ in range(4)]
+    threads = [threading.Thread(target=work, args=(i,)) for i in range(4)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
-    versions = [r["version"] for r in st.q("SELECT version FROM playbooks WHERE agent_id=?", aid)]
+    versions = [v["version"] for v in dev.versions(LOCAL_ORG, pid)]
     assert not errors and len(versions) == 600 and len(set(versions)) == 600
 
 

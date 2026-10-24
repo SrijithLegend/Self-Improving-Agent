@@ -1,14 +1,14 @@
-"""SQLite persistence: organizations (tenants) and their API keys, agents, knowledge (FTS5), lessons (FTS5),
-playbook versions, episodes, eval examples, usage. Schema changes are applied as numbered migrations."""
+"""SQLite persistence for the hosted server: organizations (tenants) and their API keys, payments, access requests,
+usage. Everything a project holds lives in sia_devtools/store.py (DevStore) in the same file. Schema changes are
+numbered migrations; the first ones created the managed-agent tables that legacy-006 drops once they're migrated."""
 import hashlib
-import json
 import secrets
 import sqlite3
 import time
 import uuid
 from contextlib import closing, contextmanager
 
-from sia_devtools.store import chunk_text, fts_query, migrate, tokens  # noqa: F401 (re-exported)
+from sia_devtools.store import migrate
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tenants (id TEXT PRIMARY KEY, name TEXT, key_hash TEXT UNIQUE, created REAL);
@@ -78,8 +78,6 @@ PLANS = {
 # so without a cap a paid plan would be unlimited.
 KEY_SCOPES = ("full", "ingest")  # ingest: send runs and feedback, read the active prompt; nothing else
 
-PRIOR, PRIOR_WEIGHT = 0.7, 2  # new lessons start with a mildly optimistic utility
-PRUNE_AFTER_USES, PRUNE_BELOW = 5, 0.45
 
 
 def hash_key(key):
@@ -139,15 +137,13 @@ class Store:
 
     def delete_org(self, tenant_id):
         """Delete an organization and everything it owns, in one transaction. Usage and payment rows are kept for
-        the books but anonymised: they no longer point at the organization, its agents or its projects."""
+        the books but anonymised: they no longer point at the organization or its projects."""
         from sia_devtools.store import DevStore
         with self._conn() as c:
             if not c.execute("SELECT 1 FROM tenants WHERE id=?", (tenant_id,)).fetchone():
                 return False
             for (pid,) in c.execute("SELECT id FROM projects WHERE org_id=?", (tenant_id,)).fetchall():
                 DevStore.purge_project(c, pid)
-            for (aid,) in c.execute("SELECT id FROM agents WHERE tenant_id=?", (tenant_id,)).fetchall():
-                self._purge_agent(c, aid)
             c.execute("UPDATE usage SET tenant_id='deleted', agent_id=NULL, project_id=NULL WHERE tenant_id=?",
                       (tenant_id,))
             c.execute("UPDATE payments SET org_id='deleted' WHERE org_id=?", (tenant_id,))
@@ -263,198 +259,6 @@ class Store:
         return {"id": request_id, "status": "approved", "email": r["email"], "org_id": org["tenant_id"],
                 "org_name": org["name"], "api_key": org["api_key"]}  # the key is shown only once
 
-    # --- agents --------------------------------------------------------------
-    def create_agent(self, tenant_id, name, domain, instructions="", rubric=""):
-        aid = uuid.uuid4().hex
-        self.x("INSERT INTO agents VALUES (?,?,?,?,?,?,?)", aid, tenant_id, name, domain, instructions, rubric, time.time())
-        return self.agent(aid)
-
-    def agent(self, agent_id, tenant_id=None):
-        rows = self.q("SELECT * FROM agents WHERE id=?", agent_id)
-        if not rows or (tenant_id is not None and rows[0]["tenant_id"] != tenant_id):
-            return None
-        return rows[0]
-
-    def agents(self, tenant_id):
-        return self.q("SELECT * FROM agents WHERE tenant_id=? ORDER BY created", tenant_id)
-
-    def update_agent(self, agent_id, **fields):
-        for k, v in fields.items():
-            if k in ("name", "domain", "instructions", "rubric") and v is not None:
-                self.x(f"UPDATE agents SET {k}=? WHERE id=?", v, agent_id)
-
-    def delete_agent(self, agent_id):
-        with self._conn() as c:
-            self._purge_agent(c, agent_id)
-
-    @staticmethod
-    def _purge_agent(c, agent_id):
-        for table in ("agents", "playbooks", "docs", "chunks", "lessons", "lessons_fts", "episodes", "examples"):
-            c.execute(f"DELETE FROM {table} WHERE {'id' if table == 'agents' else 'agent_id'}=?", (agent_id,))
-
-    # --- knowledge -----------------------------------------------------------
-    def add_doc(self, agent_id, title, content):
-        did, parts = uuid.uuid4().hex, chunk_text(content)
-        with self._conn() as c:
-            c.execute("INSERT INTO docs VALUES (?,?,?,?,?)", (did, agent_id, title, len(parts), time.time()))
-            c.executemany("INSERT INTO chunks VALUES (?,?,?,?)", [(p, title, agent_id, did) for p in parts])
-        return {"doc_id": did, "title": title, "chunks": len(parts)}
-
-    def docs(self, agent_id):
-        return self.q("SELECT id, title, chunks, created FROM docs WHERE agent_id=? ORDER BY created", agent_id)
-
-    def delete_doc(self, agent_id, doc_id):
-        with self._conn() as c:
-            found = c.execute("DELETE FROM docs WHERE id=? AND agent_id=?", (doc_id, agent_id)).rowcount
-            c.execute("DELETE FROM chunks WHERE doc_id=? AND agent_id=?", (doc_id, agent_id))
-        return bool(found)
-
-    def search_chunks(self, agent_id, text, k=5):
-        query = fts_query(text)
-        if not query:
-            return []
-        return self.q("SELECT text, title FROM chunks WHERE chunks MATCH ? AND agent_id=? ORDER BY rank LIMIT ?",
-                      query, agent_id, k)
-
-    def random_chunks(self, agent_id, n):
-        return self.q("SELECT text, title FROM chunks WHERE agent_id=? ORDER BY random() LIMIT ?", agent_id, n)
-
-    # --- lessons -------------------------------------------------------------
-    def add_lesson(self, agent_id, text, source):
-        """Store a lesson unless a near-duplicate already exists. Returns the new id or None."""
-        text = text.strip()
-        if not text:
-            return None
-        new = tokens(text)
-        for row in self._match_lessons(agent_id, text, 5):
-            old = tokens(row["text"])
-            if len(new & old) / max(len(new | old), 1) > 0.6:
-                return None
-        with self._conn() as c:
-            lid = c.execute("INSERT INTO lessons (agent_id, text, source, created) VALUES (?,?,?,?)",
-                            (agent_id, text, source, time.time())).lastrowid
-            c.execute("INSERT INTO lessons_fts VALUES (?,?,?)", (text, agent_id, lid))
-        return lid
-
-    def _match_lessons(self, agent_id, text, k):
-        query = fts_query(text)
-        if not query:
-            return []
-        return self.q("""SELECT l.* FROM lessons_fts f JOIN lessons l ON l.id = f.lesson_id
-                         WHERE lessons_fts MATCH ? AND f.agent_id=? AND l.active=1 ORDER BY f.rank LIMIT ?""",
-                      query, agent_id, k)
-
-    @staticmethod
-    def utility(lesson):
-        return (lesson["total"] + PRIOR * PRIOR_WEIGHT) / (lesson["uses"] + PRIOR_WEIGHT)
-
-    def relevant_lessons(self, agent_id, text, k=6):
-        """Lessons relevant to this task, plus the most proven general lessons, ranked by utility."""
-        picked = {r["id"]: r for r in self._match_lessons(agent_id, text, k * 2)}
-        for r in self.top_lessons(agent_id, 3):
-            picked.setdefault(r["id"], r)
-        return sorted(picked.values(), key=self.utility, reverse=True)[:k]
-
-    def top_lessons(self, agent_id, k=20):
-        # ponytail: utility sorted in Python over all active lessons; move into SQL if agents reach ~100k lessons.
-        rows = self.q("SELECT * FROM lessons WHERE agent_id=? AND active=1", agent_id)
-        return sorted(rows, key=self.utility, reverse=True)[:k]
-
-    def credit_lessons(self, lesson_ids, score):
-        """Credit lessons used in an episode with its outcome; retire lessons that keep coinciding with failure."""
-        with self._conn() as c:
-            for lid in lesson_ids:
-                c.execute("UPDATE lessons SET uses=uses+1, total=total+? WHERE id=?", (score, lid))
-            c.execute(f"""UPDATE lessons SET active=0 WHERE uses>=? AND
-                          (total + ? * ?) / (uses + ?) < ? AND id IN ({','.join('?' * len(lesson_ids)) or 'NULL'})""",
-                      (PRUNE_AFTER_USES, PRIOR, PRIOR_WEIGHT, PRIOR_WEIGHT, PRUNE_BELOW, *lesson_ids))
-
-    def lessons(self, agent_id, include_inactive=False):
-        rows = self.q(f"SELECT * FROM lessons WHERE agent_id=? {'' if include_inactive else 'AND active=1'}", agent_id)
-        for r in rows:
-            r["utility"] = round(self.utility(r), 3)
-        return sorted(rows, key=lambda r: r["utility"], reverse=True)
-
-    def set_lesson_active(self, agent_id, lesson_id, active):
-        return bool(self.n("UPDATE lessons SET active=? WHERE id=? AND agent_id=?", int(active), lesson_id, agent_id))
-
-    # --- playbooks -----------------------------------------------------------
-    def active_playbook(self, agent_id):
-        rows = self.q("SELECT * FROM playbooks WHERE agent_id=? AND active=1", agent_id)
-        return rows[0] if rows else {"version": 0, "content": "", "score": None}
-
-    def add_playbook(self, agent_id, content, score, activate, note=""):
-        with self._conn() as c:
-            version = c.execute("SELECT COALESCE(MAX(version), 0) + 1 FROM playbooks WHERE agent_id=?",
-                                (agent_id,)).fetchone()[0]
-            if activate:
-                c.execute("UPDATE playbooks SET active=0 WHERE agent_id=?", (agent_id,))
-            c.execute("INSERT INTO playbooks (agent_id, version, content, score, active, note, created) "
-                      "VALUES (?,?,?,?,?,?,?)", (agent_id, version, content, score, int(activate), note, time.time()))
-        return version
-
-    def playbooks(self, agent_id):
-        return self.q("SELECT version, content, score, active, note, created FROM playbooks "
-                      "WHERE agent_id=? ORDER BY version DESC", agent_id)
-
-    def activate_playbook(self, agent_id, version):
-        """Roll back/forward to a specific playbook version (0 = no playbook)."""
-        with self._conn() as c:
-            if version and not c.execute("SELECT 1 FROM playbooks WHERE agent_id=? AND version=?",
-                                         (agent_id, version)).fetchone():
-                return False
-            c.execute("UPDATE playbooks SET active=0 WHERE agent_id=?", (agent_id,))
-            c.execute("UPDATE playbooks SET active=1 WHERE agent_id=? AND version=?", (agent_id, version))
-            return True
-
-    # --- episodes ------------------------------------------------------------
-    def add_episode(self, agent_id, task, answer, score, critique, attempts, lesson_ids):
-        eid = uuid.uuid4().hex
-        self.x("INSERT INTO episodes VALUES (?,?,?,?,?,?,?,?,?,?,?)", eid, agent_id, task, answer, score,
-               json.dumps(critique), attempts, json.dumps(lesson_ids), None, None, time.time())
-        return eid
-
-    def episode(self, agent_id, episode_id):
-        rows = self.q("SELECT * FROM episodes WHERE id=? AND agent_id=?", episode_id, agent_id)
-        if not rows:
-            return None
-        e = rows[0]
-        e["critique"], e["lesson_ids"] = json.loads(e["critique"] or "null"), json.loads(e["lesson_ids"] or "[]")
-        return e
-
-    def episodes(self, agent_id, limit=50):
-        rows = self.q("SELECT * FROM episodes WHERE agent_id=? ORDER BY created DESC LIMIT ?", agent_id, limit)
-        for e in rows:
-            e["critique"], e["lesson_ids"] = json.loads(e["critique"] or "null"), json.loads(e["lesson_ids"] or "[]")
-        return rows
-
-    def set_feedback(self, episode_id, rating, correction):
-        self.x("UPDATE episodes SET rating=?, correction=? WHERE id=?", rating, correction, episode_id)
-
-    # --- eval examples -------------------------------------------------------
-    def add_example(self, agent_id, input, expected, source, status="verified", episode_id=None):
-        return self.x("INSERT INTO examples (agent_id, input, expected, source, created, status, episode_id) "
-                      "VALUES (?,?,?,?,?,?,?)", agent_id, input, expected, source, time.time(), status, episode_id)
-
-    def examples(self, agent_id, limit=None, include_unverified=False):
-        """Eval set, real data first: user-provided, then verified feedback corrections, then synthetic study
-        questions. User corrections stay 'pending' (out of the eval set) until someone verifies them."""
-        sql = f"""SELECT * FROM examples WHERE agent_id=? {'' if include_unverified else "AND status='verified'"}
-                 ORDER BY CASE source WHEN 'user' THEN 0 WHEN 'feedback' THEN 1 ELSE 2 END, random()"""
-        return self.q(sql + (" LIMIT ?" if limit else ""), agent_id, *([limit] if limit else []))
-
-    def example(self, agent_id, example_id):
-        rows = self.q("SELECT * FROM examples WHERE id=? AND agent_id=?", example_id, agent_id)
-        return rows[0] if rows else None
-
-    def review_example(self, agent_id, example_id, status):
-        """pending -> verified | rejected. Returns False if the example is missing or was already reviewed."""
-        return bool(self.n("UPDATE examples SET status=? WHERE id=? AND agent_id=? AND status='pending'",
-                           status, example_id, agent_id))
-
-    def delete_example(self, agent_id, example_id):
-        return bool(self.n("DELETE FROM examples WHERE id=? AND agent_id=?", example_id, agent_id))
-
     # --- usage (metering) ----------------------------------------------------
     def record_usage(self, tenant_id, agent_id, action, llm_calls, units=1, project_id=None):
         self.x("INSERT INTO usage (tenant_id, agent_id, action, llm_calls, created, units, project_id) "
@@ -476,29 +280,3 @@ class Store:
     def units_since(self, tenant_id, action, since):
         return self.q("SELECT COALESCE(SUM(units), 0) n FROM usage WHERE tenant_id=? AND action=? AND created>=?",
                       tenant_id, action, since)[0]["n"]
-
-    # --- stats ---------------------------------------------------------------
-    def stats(self, agent_id):
-        scores = [r["score"] for r in self.q(
-            "SELECT score FROM episodes WHERE agent_id=? AND score IS NOT NULL ORDER BY created", agent_id)]
-        pb = self.active_playbook(agent_id)
-        last_improve = self.q("SELECT MAX(created) t FROM playbooks WHERE agent_id=?", agent_id)[0]["t"] or 0
-        since = self.q("SELECT COUNT(*) n FROM episodes WHERE agent_id=? AND created>?", agent_id, last_improve)[0]["n"]
-        avg = lambda xs: round(sum(xs) / len(xs), 3) if xs else None
-        half = min(20, len(scores) // 2)  # first/last windows never overlap
-        count = lambda t: self.q(f"SELECT COUNT(*) n FROM {t} WHERE agent_id=?", agent_id)[0]["n"]
-        return {
-            "episodes": len(scores),
-            "avg_score_first_20": avg(scores[:half]),
-            "avg_score_last_20": avg(scores[len(scores) - half:] if half else []),
-            "active_lessons": self.q("SELECT COUNT(*) n FROM lessons WHERE agent_id=? AND active=1", agent_id)[0]["n"],
-            "documents": count("docs"),
-            "eval_examples": self.q("SELECT COUNT(*) n FROM examples WHERE agent_id=? AND status='verified'",
-                                    agent_id)[0]["n"],
-            "pending_examples": self.q("SELECT COUNT(*) n FROM examples WHERE agent_id=? AND status='pending'",
-                                       agent_id)[0]["n"],
-            "playbook_version": pb["version"],
-            "playbook_score": pb["score"],
-            "episodes_since_last_improve": since,
-            "improve_recommended": since >= 10,
-        }

@@ -251,7 +251,6 @@ def _migrate_agent(c, a, now):
     from sia_devtools.store import dump, split_for, validate_settings
     from sia_loop import config
 
-    from .store import PRIOR, PRIOR_WEIGHT
     n = Counter()
     pid, org = a["id"], a["tenant_id"]
     name = _slug(a["domain"])
@@ -273,7 +272,7 @@ def _migrate_agent(c, a, now):
     # lessons: active ones in the top 12 by utility were in every prompt, so they become pinned; other active ones
     # wait in probation; inactive ones are retired
     rows = c.execute("SELECT * FROM lessons WHERE agent_id=?", (pid,)).fetchall()
-    utility = lambda r: (r["total"] + PRIOR * PRIOR_WEIGHT) / (r["uses"] + PRIOR_WEIGHT)  # noqa: E731
+    utility = lambda r: (r["total"] + 0.7 * 2) / (r["uses"] + 2)  # noqa: E731 (the managed agents' own formula)
     top = {r["id"] for r in sorted((r for r in rows if r["active"]), key=utility, reverse=True)[:config.MAX_LESSONS]}
     for r in rows:
         state = "retired" if not r["active"] else "pinned" if r["id"] in top else "probation"
@@ -351,6 +350,8 @@ def migrate_agents(db):
     total, now = Counter(), time.time()
     with closing(sqlite3.connect(db, timeout=30, isolation_level=None)) as c:
         c.row_factory = sqlite3.Row
+        if not c.execute("SELECT 1 FROM sqlite_master WHERE name='agents'").fetchone():
+            return {}  # legacy-006 already dropped the managed-agent tables: nothing is left to copy
         c.execute("BEGIN IMMEDIATE")
         try:
             for a in c.execute("SELECT * FROM agents WHERE id NOT IN (SELECT id FROM projects) ORDER BY created")\
@@ -362,6 +363,43 @@ def migrate_agents(db):
             c.execute("ROLLBACK")
             raise
     return dict(total)
+
+
+LEGACY_TABLES = ("agents", "docs", "chunks", "lessons_fts", "examples", "playbooks", "episodes")
+DROP_MIGRATION = "legacy-006-drop-agent-tables"
+
+
+def drop_legacy_tables(db):
+    """legacy-006: drop the managed-agent tables, now duplicates of projects, knowledge, datasets, versions and runs.
+    Refuses while any of them still holds rows that legacy-005 hasn't copied (its marker is missing): data is never
+    dropped before it has a home. The lessons table stays: it is the projects' memory now."""
+    with closing(sqlite3.connect(db, timeout=30, isolation_level=None)) as c:
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            done = lambda mid: c.execute("SELECT 1 FROM schema_migrations WHERE id=?", (mid,)).fetchone()  # noqa
+            if done(DROP_MIGRATION):
+                c.execute("ROLLBACK")
+                return False
+            present = [t for t in LEGACY_TABLES if c.execute("SELECT 1 FROM sqlite_master WHERE name=?",
+                                                             (t,)).fetchone()]
+            held = [t for t in present if c.execute(f"SELECT 1 FROM {t} LIMIT 1").fetchone()]
+            if held and not done(AGENTS_MIGRATION):
+                raise OpsError(f"refusing to drop {', '.join(held)}: they still hold managed-agent data and "
+                               f"{AGENTS_MIGRATION} hasn't run (run `sia migrate-agents` first)")
+            for t in present:
+                c.execute(f"DROP TABLE IF EXISTS {t}")
+            c.execute("INSERT INTO schema_migrations VALUES (?,?)", (DROP_MIGRATION, time.time()))
+            c.execute("COMMIT")
+        except BaseException:
+            c.execute("ROLLBACK")
+            raise
+    return True
+
+
+def finish_legacy(db):
+    """On start: migrate any managed agents (once), then drop their old tables."""
+    auto_migrate_agents(db)
+    return drop_legacy_tables(db)
 
 
 def auto_migrate_agents(db):

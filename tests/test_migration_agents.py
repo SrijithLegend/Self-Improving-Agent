@@ -4,6 +4,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sia import ops  # noqa: E402
@@ -106,3 +108,28 @@ def test_cli_migrate_agents(tmp_path, capsys):
     legacy_db(db)
     assert cli(["migrate-agents", "--db", db]) == 0 and '"projects": 2' in capsys.readouterr().out
     assert cli(["migrate-agents", "--db", db]) == 0 and "nothing to migrate" in capsys.readouterr().out
+
+
+def test_old_tables_are_dropped_only_after_the_migration(tmp_path):
+    db = str(tmp_path / "legacy.db")
+    legacy_db(db)
+    with pytest.raises(ops.OpsError, match="migrate-agents"):
+        ops.drop_legacy_tables(db)  # legacy-005 hasn't run: the data has no home yet
+    with sqlite3.connect(db) as c:
+        assert c.execute("SELECT COUNT(*) FROM agents").fetchone()[0] == 2  # nothing was dropped
+    assert ops.finish_legacy(db) is True  # migrate first, then drop
+    with sqlite3.connect(db) as c:
+        tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert not tables & set(ops.LEGACY_TABLES) and "lessons" in tables
+        assert c.execute("SELECT COUNT(*) FROM lessons WHERE project_id=?", (AGENT,)).fetchone()[0] == 16
+    assert ops.drop_legacy_tables(db) is False and ops.migrate_agents(db) == {}  # idempotent
+    assert DevStore(db).project(ORG, AGENT)["settings"]["kind"] == "agent"
+
+
+def test_a_new_database_never_keeps_the_old_tables(tmp_path):
+    from sia.store import Store
+    db = str(tmp_path / "new.db")
+    Store(db)
+    assert ops.finish_legacy(db) is True
+    with sqlite3.connect(db) as c:
+        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='agents'").fetchone()
