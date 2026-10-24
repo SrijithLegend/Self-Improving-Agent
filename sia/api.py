@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sia_devtools.errors import NotFound, QuotaExceeded, SIAError, ValidationError
 from sia_devtools.store import LOCAL_ORG, DevStore
 
+from sia_loop import actor as sia_actor
 from sia_loop import jobs
 
 from . import billing
@@ -400,6 +401,17 @@ class TraceIn(Strict):
 
 class RunsIn(Strict):
     runs: list[TraceIn] = Field(min_length=1, max_length=500)
+
+
+class TaskIn(Strict):
+    task: str = Field(min_length=1, max_length=20000)
+    revise: bool = Field(True, description="Let the agent critique and revise its draft (more model calls).")
+
+
+class TableIn(Strict):
+    name: str = Field(min_length=1, max_length=64)
+    rows: list[dict] | None = Field(None, max_length=100_000)
+    csv: str | None = Field(None, max_length=5_000_000, description="CSV text with a header row, instead of rows.")
 
 
 class OutcomeIn(Strict):
@@ -913,6 +925,50 @@ def veto_lesson(project_id: str, lesson_id: int, action: Literal["retire", "prob
     """Retire a lesson (a human veto: the loop can't pin it again) or put it back in probation."""
     return dev.set_lesson_state(t["id"], project_id, lesson_id, "retired" if action == "retire" else "probation",
                                 actor(t))
+
+
+# --- hosted agents: tasks and tables --------------------------------------------------
+@app.post("/v1/projects/{project_id}/tasks")
+def run_project_task(project_id: str, body: TaskIn, t=Depends(tenant), x_llm_provider: str = Header(default=""),
+                     x_llm_key: str = Header(default="")):
+    """Run one task with the agent's active config, recorded as a run. The model is the one the config names: send
+    X-LLM-Provider (matching it) and X-LLM-Key to use your own key, or the server's key for that provider is used."""
+    llm_quota(t["id"])
+    key = None
+    if x_llm_key:
+        from sia_loop import config
+        active = dev.active_version(t["id"], project_id, config.CONFIG_NAME)
+        want = config.parse(active["content"])["model"]["provider"] if active else None
+        if want and (x_llm_provider or "gemini").lower() != want:
+            raise HTTPException(400, f"This agent's config uses the {want} provider; send X-LLM-Provider: {want}.")
+        key = x_llm_key
+    out = {"llm_calls": 0}
+    with llm_slots.take(t["id"]):
+        try:
+            out = call(sia_actor.perform, dev, t["id"], project_id, body.task, key=key, revise=body.revise)
+            return out
+        finally:
+            store.record_usage(t["id"], None, "tasks", out.get("llm_calls", 0), project_id=project_id)
+
+
+@app.post("/v1/projects/{project_id}/tables", status_code=201)
+def put_table(project_id: str, body: TableIn, t=Depends(tenant)):
+    """A read-only table for the lookup_table tool (rows, or CSV text with a header row). Replaces one of the same
+    name."""
+    if (body.rows is None) == (body.csv is None):
+        raise HTTPException(400, "Send exactly one of rows or csv.")
+    rows = body.rows if body.rows is not None else list(csv.DictReader(io.StringIO(body.csv)))
+    return dev.put_table(t["id"], project_id, body.name, rows, actor(t))
+
+
+@app.get("/v1/projects/{project_id}/tables")
+def list_tables(project_id: str, t=Depends(tenant)):
+    return dev.tables(t["id"], project_id)
+
+
+@app.delete("/v1/projects/{project_id}/tables/{name}", status_code=204)
+def delete_table(project_id: str, name: str, t=Depends(tenant)):
+    dev.delete_table(t["id"], project_id, name, actor(t))
 
 
 # --- jobs ---------------------------------------------------------------------------

@@ -1196,6 +1196,58 @@ class DevStore:
             self._project(c, org, pid)
             return self._config_refs(c, pid)
 
+    def examples_by_id(self, org, pid, ids):
+        """Live, verified examples of this project, in the order of `ids` (unknown ids are skipped)."""
+        if not ids:
+            return []
+        with self._conn() as c:
+            self._project(c, org, pid)
+            rows = {r["id"]: self._ex_out(r) for r in c.execute(
+                f"""SELECT e.* FROM dataset_examples e JOIN datasets d ON d.id=e.dataset_id WHERE d.project_id=? AND
+                e.removed_in IS NULL AND e.status='verified' AND e.id IN ({','.join('?' * len(ids))})""",
+                (pid, *ids))}
+        return [rows[i] for i in ids if i in rows]
+
+    # --- lookup tables (read-only data for the lookup_table tool) ---------------
+    MAX_TABLE = 5_000_000
+
+    def put_table(self, org, pid, name, rows, actor=None):
+        """Create or replace a table: a list of flat objects (column -> text, number or bool)."""
+        if not isinstance(name, str) or not NAME_RX.match(name):
+            raise ValidationError("Table name: 1-64 letters, digits, '_', '-' or '.'.")
+        if not isinstance(rows, list) or not all(isinstance(r, dict) and all(
+                isinstance(v, (str, int, float, bool)) or v is None for v in r.values()) for r in rows):
+            raise ValidationError("rows must be a list of flat objects")
+        text = json.dumps(rows, ensure_ascii=False)
+        if len(text) > self.MAX_TABLE:
+            raise ValidationError("a table can be at most 5 MB")
+        with self._conn(write=True) as c:
+            self._project(c, org, pid)
+            c.execute("INSERT INTO lookup_tables VALUES (?,?,?,?,?) ON CONFLICT(project_id, name) DO UPDATE SET "
+                      "rows=excluded.rows, size=excluded.size, created=excluded.created",
+                      (pid, name, text, len(rows), time.time()))
+            self._audit(c, pid, actor, "table.put", {"name": name, "rows": len(rows)})
+        return {"name": name, "rows": len(rows)}
+
+    def tables(self, org, pid):
+        with self._conn() as c:
+            self._project(c, org, pid)
+            return [dict(r) for r in c.execute("SELECT name, size rows, created FROM lookup_tables WHERE project_id=? "
+                                               "ORDER BY name", (pid,))]
+
+    def lookup_table(self, org, pid, name):
+        with self._conn() as c:
+            self._project(c, org, pid)
+            row = c.execute("SELECT rows FROM lookup_tables WHERE project_id=? AND name=?", (pid, name)).fetchone()
+        return json.loads(row["rows"]) if row else None
+
+    def delete_table(self, org, pid, name, actor=None):
+        with self._conn(write=True) as c:
+            self._project(c, org, pid)
+            if not c.execute("DELETE FROM lookup_tables WHERE project_id=? AND name=?", (pid, name)).rowcount:
+                raise NotFound("Table not found.")
+            self._audit(c, pid, actor, "table.delete", {"name": name})
+
     # --- knowledge (documents the hosted agent can search) ----------------------
     def add_knowledge(self, org, pid, title, content, actor=None):
         title, content = _text(title, "title", 300, required=True), _text(content, "content", 2_000_000, True)

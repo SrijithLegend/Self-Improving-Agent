@@ -32,6 +32,10 @@ class Unavailable(LLMError):
     """Overloaded/rate-limited/unreachable after retries; worth trying the next model in the chain."""
 
 
+class BadJSON(LLMError):
+    """The model answered, but not with a JSON object."""
+
+
 class LLM:
     def __init__(self, provider="gemini", api_key="", model=None, base_url=None):
         provider = (provider or "gemini").lower()
@@ -155,4 +159,4 @@ def parse_json(raw):
                 return json.loads(raw[start:end + 1])
             except json.JSONDecodeError:
                 pass
-    raise LLMError(f"Model did not return valid JSON: {raw[:300]}")
+    raise BadJSON(f"Model did not return valid JSON: {raw[:300]}")
