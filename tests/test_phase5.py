@@ -127,7 +127,7 @@ def test_hosted_canary_routes(tmp_path, monkeypatch):
 def runs(version, n, *, errors=0, outcome_fails=None, started=None):
     started = started or time.time()
     return [{"id": f"v{version}-{started}-{i}", "name": "agent.run", "version_name": NAME, "version": version,
-             "started": started + i * 0.001, "status": "error" if i < errors else "success",
+             "started": started + i * 1e-6, "status": "error" if i < errors else "success",
              "scores": {} if outcome_fails is None else {"outcome": 0 if i < outcome_fails else 1}}
             for i in range(n)]
 
