@@ -268,7 +268,7 @@ class SIAClient:
         self._buffer, self._lock, self._send_lock = collections.deque(), threading.Lock(), threading.Lock()
         self._wake, self._thread = threading.Event(), None
         self.dropped, self.last_error = 0, None
-        self._prompts: dict[str, tuple[float, Prompt | None]] = {}
+        self._prompts: dict[tuple, tuple[float, Prompt | None]] = {}
 
     def __repr__(self):
         return f"SIAClient(mode={self.mode!r}, project={self.project!r})"  # never shows the key
@@ -615,25 +615,53 @@ class SIAClient:
         return self._do(lambda: self._store.version(LOCAL_ORG, self.project_id, name, version),
                         "GET", self._p(f"/versions/{name}/{version}"))
 
-    def active_version(self, name: str = "system_prompt") -> dict | None:
-        return self._do(lambda: self._store.active_version(LOCAL_ORG, self.project_id, name),
-                        "GET", self._p("/versions/active"), params={"name": name})
+    def active_version(self, name: str = "system_prompt", unit: str | None = None) -> dict | None:
+        """The version production uses. With `unit` and a canary running, the canary or the active version, the same
+        one for the same unit every time ("variant" says which)."""
+        unit = None if unit is None else str(unit)
+        return self._do(lambda: self._store.active_version(LOCAL_ORG, self.project_id, name, unit),
+                        "GET", self._p("/versions/active"), params={"name": name, "unit": unit})
 
-    def get_prompt(self, name: str = "system_prompt", default: str | None = None, ttl: float = 30.0) -> Prompt | None:
+    def get_prompt(self, name: str = "system_prompt", default: str | None = None, ttl: float = 30.0,
+                   unit: "str | int | None" = None) -> Prompt | None:
         """The active version's text for your app to use, cached for `ttl` seconds. If SIA is unreachable it
-        falls back to the last known text, then to `default`, so a SIA outage never takes your app down."""
-        hit = self._prompts.get(name)
+        falls back to the last known text, then to `default`, so a SIA outage never takes your app down.
+
+        Pass `unit` (a user or session id) to take part in canaries: while one runs, each unit sticks to one
+        variant, and the Prompt's version records which one served it."""
+        key = (name, None if unit is None else str(unit))
+        hit = self._prompts.get(key)
         if hit and time.monotonic() - hit[0] < ttl:
             return hit[1]
         fallback = Prompt(default, None, name) if default is not None else None
         try:
-            v = self.active_version(name)
+            v = self.active_version(name, key[1])
         except SIAError as e:
             log.warning("SIA: could not fetch prompt %r, using %s: %s", name, "cached" if hit else "default", e)
             return hit[1] if hit else fallback
         p = Prompt(v["content"], v["version"], name) if v else fallback
-        self._prompts[name] = (time.monotonic(), p)
+        if len(self._prompts) >= 10_000:  # ponytail: oldest-first eviction, an LRU if per-unit caching gets hot
+            self._prompts.pop(next(iter(self._prompts)))
+        self._prompts[key] = (time.monotonic(), p)
         return p
+
+    def start_canary(self, version: int, pct: int = 10, *, name: str = "system_prompt",
+                     reviewer: str | None = None) -> dict:
+        """Serve an approved version to pct% of units (see get_prompt(unit=...)) next to the active one."""
+        body = {"pct": pct, "reviewer": reviewer}
+        return self._do(lambda: self._store.start_canary(LOCAL_ORG, self.project_id, name, version, pct, reviewer),
+                        "POST", self._p(f"/versions/{name}/{version}/canary"), body)
+
+    def promote_canary(self, *, name: str = "system_prompt", reviewer: str | None = None) -> dict:
+        self._prompts.clear()
+        return self._do(lambda: self._store.promote_canary(LOCAL_ORG, self.project_id, name, reviewer),
+                        "POST", self._p(f"/versions/{name}/canary/promote"), {"reviewer": reviewer})
+
+    def stop_canary(self, *, name: str = "system_prompt", reason: str | None = None,
+                    reviewer: str | None = None) -> dict:
+        self._prompts.clear()
+        return self._do(lambda: self._store.stop_canary(LOCAL_ORG, self.project_id, name, reason, reviewer),
+                        "POST", self._p(f"/versions/{name}/canary/stop"), {"reason": reason, "reviewer": reviewer})
 
     def approve(self, version: int, *, name: str = "system_prompt", comparison: "dict | str | None" = None,
                 override_reason: str | None = None, reviewer: str | None = None) -> dict:
@@ -651,7 +679,7 @@ class SIAClient:
 
     def activate(self, version: int, *, name: str = "system_prompt", reviewer: str | None = None) -> dict:
         """Make an approved version the one get_prompt() returns. Activating an older one is a rollback."""
-        self._prompts.pop(name, None)
+        self._prompts.clear()
         return self._do(lambda: self._store.activate(LOCAL_ORG, self.project_id, name, version, reviewer),
                         "POST", self._p(f"/versions/{name}/{version}/activate"), {"reviewer": reviewer})
 
@@ -694,7 +722,7 @@ class SIAClient:
             "You improve the instructions of an AI application. You only change instruction text, never code.",
             f"CURRENT INSTRUCTIONS:\n{current['content'] if current else '(none yet)'}\n\nEVIDENCE OF FAILURES:\n"
             f"{evidence}\n\n"
-            + (f"These lines are locked and must appear verbatim in your output:\n"
+            + ("These lines are locked and must appear verbatim in your output:\n"
                + "\n".join(f"- {t}" for t in locked) + "\n\n" if locked else "")
             + "Find the recurring failure patterns, extract up to 5 short reusable lessons, then write improved "
               "instructions that fix the patterns and keep everything that already works. Return JSON: "

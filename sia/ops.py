@@ -297,7 +297,8 @@ def _migrate_agent(c, a, now):
                    "the agent's active playbook when it was migrated" if active else "inactive playbook when migrated",
                    pb["created"] if pb else now, now))
         if active:
-            c.execute("INSERT INTO active_versions VALUES (?,?,?,?,?)", (pid, config.CONFIG_NAME, 1, now, "migration"))
+            c.execute("INSERT INTO active_versions (project_id, name, version, activated, activated_by) VALUES "
+                      "(?,?,?,?,?)", (pid, config.CONFIG_NAME, 1, now, "migration"))
         n["versions"] += 1
 
     # examples -> the 'eval' dataset. Synthetic ones were written by the agent itself, so they are no longer trusted:

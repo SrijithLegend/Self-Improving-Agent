@@ -43,7 +43,7 @@ def test_g2_no_holdout_input_reaches_the_optimizer(demo):
     dev.review_feedback(LOCAL_ORG, pid, fb["id"], "verified")
     rec = cycle.run_cycle(dev, LOCAL_ORG, pid, payload={"operators": ["rewrite_playbook", "edit_system_prompt"]},
                           log=loop_demo.show, seed=1)
-    assert rec["outcome"] == "awaiting_approval"  # it reached stage 3
+    assert rec["outcome"] == "canary_started"  # it reached stage 3 (a hosted agent starts at autonomy 2)
     prompts = loop_demo.OfflineModel.prompts
     optimizer_prompts = [p for p in prompts if any(s in p[1] for s in OPTIMIZER_SYSTEMS)]
     before_holdout = [p for p in prompts if p[0] not in ("holdout", "holdout_verdict", "promote")]
@@ -178,7 +178,7 @@ def test_loop_demo_offline_reaches_stage_3(tmp_path, monkeypatch, capsys):
     assert stages[:4] == ["baseline", "propose", "candidates", "screen"] and "holdout_verdict" in stages
     assert rec["holdout"]["verdict"] == "improved"
     by_op = {c["operator"]: c for c in rec["candidates"]}
-    assert by_op["rewrite_playbook"]["status"] == "candidate"            # the good one, waiting at autonomy 0
+    assert by_op["rewrite_playbook"]["status"] == "approved"             # the good one, into a canary
     assert by_op["edit_system_prompt"]["status"] == "rejected"           # the poster's friendly line
     assert "holdout" in capsys.readouterr().out
     assert os.path.exists(tmp_path / "demo.db")

@@ -215,7 +215,9 @@ def test_outcome_route_accepts_ingest_keys(tmp_path, monkeypatch):
 
 def test_loop_settings_are_validated(sia):
     s = sia.project_settings()
-    assert s["loop"]["autonomy"] == 0 and s["kind"] == "app"  # an upgraded project behaves exactly as before
+    assert s["loop"]["autonomy"] == 1 and s["kind"] == "app"  # a new project: the loop may propose, a person decides
+    from sia_devtools.store import validate_settings
+    assert validate_settings({}, stored=True)["loop"]["autonomy"] == 0  # an upgraded project behaves as before
     for bad in ({"autonomy": 4}, {"holdout_pct": 10}, {"canary_pct": 51}, {"max_calls_per_cycle": 5},
                 {"every_hours": 200}, {"allowed_tools": ["rm_rf"]}, {"webhook_url": "http://x.example"},
                 {"judge": {"provider": "anthropic"}}, {"paused": "yes"}, {"unknown": 1}):

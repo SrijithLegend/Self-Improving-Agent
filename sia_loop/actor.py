@@ -189,9 +189,10 @@ def perform(dev, org, pid, task, *, key=None, revise=True, learn=True, tags=(), 
     if p["settings"]["kind"] != "agent":
         raise ValidationError("Tasks run only on hosted agents (projects with settings.kind = 'agent').")
     rid = run_id or uuid.uuid4().hex
-    active = dev.active_version(org, pid, config.CONFIG_NAME)
+    active = dev.active_version(org, pid, config.CONFIG_NAME, unit=rid)  # a running canary gets its share by run id
     if active is None:
         raise ValidationError("This agent has no active agent_config version yet.")
+    tags = [*tags, "canary"] if active.get("variant") == "canary" else list(tags)
     cfg = config.parse(active["content"])
     llm = models.for_config(cfg, key)
     ctx = context_for(dev, org, pid, cfg, llm, revise=revise)
@@ -199,7 +200,8 @@ def perform(dev, org, pid, task, *, key=None, revise=True, learn=True, tags=(), 
     record(dev, org, pid, task, result, active["version"], tags=tags, run_id=rid)
     new = memory.reflect(dev, org, pid, llm, task, result.draft, result.answer, result.critique, result.attempts,
                          ctx.domain) if learn and revise else []
-    return {"run_id": rid, "answer": result.answer, "version": active["version"], "checks": result.checks,
+    return {"run_id": rid, "answer": result.answer, "version": active["version"], "variant": active["variant"],
+            "checks": result.checks,
             "attempts": result.attempts, "self_critique": result.self_critique, "critique": result.critique,
             "tools_used": [s["tool"] for s in result.transcript], "sources": result.sources,
             "lessons_used": [ctx.lessons[i] for i in cfg["lessons"] if i in ctx.lessons], "new_lessons": new,

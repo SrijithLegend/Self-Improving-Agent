@@ -76,5 +76,18 @@ def decide(dev, org, pid, version, cmp_holdout, cmp_dev=None, payload=None, acto
         dev.approve(org, pid, config.CONFIG_NAME, version, comparison_id=cmp_holdout["id"], actor=who)
         dev.activate(org, pid, config.CONFIG_NAME, version, actor=who)
         return {"status": "approved", "outcome": "activated", "rules": report, "comparison_id": cmp_holdout["id"]}
-    return {"status": "candidate", "outcome": "awaiting_approval", "reason": "canary promotion arrives in phase 5",
-            "rules": report, "comparison_id": cmp_holdout["id"]}
+    # autonomy 2 and 3: the loop approves (every rule held, on an improved holdout verdict) and starts a canary;
+    # the monitor decides from live traffic whether it rolls back, waits for a person (2) or goes to everyone (3)
+    from sia_devtools.errors import Conflict
+
+    from . import jobs, monitor
+    dev.approve(org, pid, config.CONFIG_NAME, version, comparison_id=cmp_holdout["id"], actor=actor)
+    pct = dev.project(org, pid)["settings"]["loop"]["canary_pct"]
+    try:
+        canary = dev.start_canary(org, pid, config.CONFIG_NAME, version, pct, actor=actor)
+    except Conflict as e:  # another canary is still running: this one waits, approved
+        return {"status": "approved", "outcome": "approved", "reason": str(e), "rules": report,
+                "comparison_id": cmp_holdout["id"]}
+    jobs.enqueue(dev, org, pid, "monitor", run_after=time.time() + monitor.EVERY, unique="queued")
+    return {"status": "approved", "outcome": "canary_started", "canary": canary, "rules": report,
+            "comparison_id": cmp_holdout["id"]}

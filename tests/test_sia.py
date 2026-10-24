@@ -196,12 +196,12 @@ def test_study_evaluate_and_improve_are_jobs(dev, agent):
     jobs.work(dev, once=True)
     assert jobs.get(dev, LOCAL_ORG, ev["job_id"])["result"]["score"] == 0.0  # scored by `contains`, not by itself
 
-    first = agent.improve()  # a cycle; at autonomy 0 a winner waits for a person
+    first = agent.improve()  # a cycle; at autonomy 2 (a new hosted agent) a winner goes into a canary
     assert agent.improve()["job_id"] == first["job_id"]  # one cycle at a time
     jobs.work(dev, once=True)
     rec = jobs.get(dev, LOCAL_ORG, first["job_id"])["result"]
-    assert rec["outcome"] == "awaiting_approval" and rec["holdout"]["candidate"] > rec["holdout"]["baseline"]
-    assert agent.stats()["playbook_version"] == 2
+    assert rec["outcome"] == "canary_started" and rec["holdout"]["candidate"] > rec["holdout"]["baseline"]
+    assert agent.stats()["playbook_version"] == 2  # production stays put until live traffic agrees
 
     second = agent.improve(activate=True)  # a person asked for a release: the holdout winner goes live
     jobs.work(dev, once=True)

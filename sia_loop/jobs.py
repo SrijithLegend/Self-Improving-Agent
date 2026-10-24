@@ -28,15 +28,22 @@ def _out(row):
     return j
 
 
+PAUSABLE = ("cycle", "monitor")
+
+
 def enqueue(dev, org, pid, kind, payload=None, run_after=None, unique=False):
     """Queue a job for a project. unique=True returns the job of this kind already queued or running, if any,
-    instead of adding a second one."""
+    instead of adding a second one; unique="queued" looks at queued jobs only. While the project's loop is paused,
+    no cycle or monitor job is queued (G7)."""
     if kind not in KINDS:
         raise ValidationError(f"job kind must be one of {KINDS}")
     with dev._conn(write=True) as c:
-        dev._project(c, org, pid)
-        if unique and (row := c.execute("SELECT * FROM jobs WHERE project_id=? AND kind=? AND status IN "
-                                        "('queued', 'running') ORDER BY created LIMIT 1", (pid, kind)).fetchone()):
+        p = dev._project(c, org, pid)
+        if kind in PAUSABLE and p["settings"]["loop"]["paused"]:
+            raise Conflict("The loop is paused for this project; resume it first.")
+        states = "('queued')" if unique == "queued" else "('queued', 'running')"
+        if unique and (row := c.execute(f"SELECT * FROM jobs WHERE project_id=? AND kind=? AND status IN {states} "
+                                        "ORDER BY created LIMIT 1", (pid, kind)).fetchone()):
             return _out(row)
         jid, now = uuid.uuid4().hex, time.time()
         c.execute("INSERT INTO jobs (id, project_id, kind, payload, run_after, created) VALUES (?,?,?,?,?,?)",
@@ -194,7 +201,9 @@ def _study(dev, job):
 def default_handlers():
     """Job kind -> fn(dev, job) -> result dict. A result with "_status" finishes the job with that status (for
     example skipped_budget)."""
-    return {"noop": lambda dev, job: {"ok": True}, "cycle": _cycle, "evaluate": _evaluate, "study": _study}
+    from . import monitor
+    return {"noop": lambda dev, job: {"ok": True}, "cycle": _cycle, "evaluate": _evaluate, "study": _study,
+            "monitor": monitor.handler}
 
 
 def run_one(dev, worker, handlers):

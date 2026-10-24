@@ -5,7 +5,9 @@
 A returns-policy agent starts out not knowing that members get 60 days. One improvement cycle proposes two changes:
 a playbook rewritten from the failures (good) and the poster's "friendly" line in the system prompt (bad: it
 approves returns the policy forbids). The loop screens both on practice (dev) cases, checks the survivor on the full
-dev split, and lets the held-out cases decide.
+dev split, and lets the held-out cases decide. At autonomy 3 the winner then serves half the live traffic as a canary;
+outcome signals from the (simulated) refunds system decide whether it goes to everyone. Finally a person pushes the
+friendly line into a canary anyway, and live traffic rolls it back.
 """
 import argparse
 import os
@@ -17,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sia_devtools.store import LOCAL_ORG, DevStore  # noqa: E402
-from sia_loop import config, cycle, models  # noqa: E402
+from sia_loop import actor, config, cycle, models, monitor  # noqa: E402
 
 LOCKED = "Final-sale items can never be returned."
 BASE_PROMPT = f"You decide returns. Returns are accepted within 30 days. {LOCKED} Start with DECISION: YES or NO."
@@ -27,7 +29,7 @@ BAD_LINE = ("Customers are our top priority: be warm, give them the benefit of t
 ITEMS = ["boots", "tent", "jacket", "lamp", "kettle", "chair", "drone", "watch", "scarf", "bike"]
 
 
-def cases(n=150):
+def cases(n=150, start=1000):
     """Deterministic returns cases. The ones a 30-day-only agent gets wrong are members between 31 and 60 days (about
     a third of them, so every random dev/holdout split has plenty). Late non-member returns are critical: approving
     them is exactly the poster's regression."""
@@ -37,7 +39,7 @@ def cases(n=150):
         days = ([35, 44, 52, 59, 12, 70] if member else [5, 12, 20, 29, 35, 44, 70, 90])[(i // 2) % (6 if member
                                                                                                     else 8)]
         ok = not final and days <= (60 if member else 30)
-        task = (f"Can I return the {ITEMS[i % 10]} (order {1000 + i}) bought {days} days ago?"
+        task = (f"Can I return the {ITEMS[i % 10]} (order {start + i}) bought {days} days ago?"
                 + (" I am a member." if member else "") + (" It was a final-sale item." if final else ""))
         out.append({"input": task, "expected_output": f"DECISION: {'YES' if ok else 'NO'}",
                     "critical": not member and not final and days > 30})
@@ -107,20 +109,67 @@ def show(stage, detail):
     print(f"  {stage:<16} {keep}")
 
 
+def replay(dev, pid, n, start):
+    """Live traffic: n new customers ask; the refunds system later reports whether each decision was right."""
+    served = {"active": 0, "canary": 0}
+    for case in cases(n, start):
+        out = actor.perform(dev, LOCAL_ORG, pid, case["input"], learn=False)
+        served[out["variant"]] += 1
+        dev.record_outcome(LOCAL_ORG, pid, out["run_id"], out["answer"] == case["expected_output"], "refunds-db")
+    return served
+
+
+def active(dev, pid):
+    return dev.active_version(LOCAL_ORG, pid, config.CONFIG_NAME)["version"]
+
+
 def offline(db):
     models.factory = OfflineModel
     os.environ.setdefault("SIA_LLM_KEY_GEMINI", "offline")
     dev = DevStore(db)
     pid, did = setup(dev)
     hold = dev.dataset(LOCAL_ORG, pid, did, split="holdout")["examples"]
-    print(f"returns agent: {len(cases())} cases, {len(hold)} held out\n\ncycle 1")
-    rec = cycle.run_cycle(dev, LOCAL_ORG, pid, payload={"operators": ["rewrite_playbook", "edit_system_prompt"]},
-                          log=show, seed=1)
-    print("\n" + cycle.summary(rec))
-    for c in rec["candidates"]:
-        print(f"  @{c.get('version', '-')}: {c['operator']:<20} {c['status']:<10} {'; '.join(c.get('diff', []))}"
-              + (f"  ({c['reason']})" if c.get("reason") else ""))
-    return {"pid": pid, "dataset": did, "cycles": [rec], "dev": dev, "holdout": hold}
+    dev.update_project(LOCAL_ORG, pid, {"loop": {"autonomy": 3, "canary_pct": 50, "canary_min_runs": 30,
+                                                 "canary_min_hours": 0}})
+    print(f"returns agent: {len(cases())} cases, {len(hold)} held out, autonomy 3, active @{active(dev, pid)}")
+    out = {"pid": pid, "dataset": did, "cycles": [], "monitor": [], "dev": dev, "holdout": hold}
+
+    for n in (1, 2, 3):  # the spec allows up to three cycles to find and release the good config
+        print(f"\ncycle {n}")
+        rec = cycle.run_cycle(dev, LOCAL_ORG, pid, payload={"operators": ["rewrite_playbook", "edit_system_prompt"]},
+                              log=show, seed=n)
+        out["cycles"].append(rec)
+        print("  " + cycle.summary(rec))
+        for c in rec["candidates"]:
+            print(f"  @{c.get('version', '-')}: {c['operator']:<20} {c['status']:<10} "
+                  f"{'; '.join(c.get('diff', []))}" + (f"  ({c['reason']})" if c.get("reason") else ""))
+        if rec["outcome"] == "canary_started":
+            served = replay(dev, pid, 120, start=5000 + 1000 * n)
+            actions = monitor.check(dev, LOCAL_ORG, pid)
+            out["monitor"].append(actions)
+            print(f"  live traffic   {served}; monitor: {[a['action'] for a in actions]}")
+        if any(a["action"] == "promoted" for acts in out["monitor"] for a in acts):
+            break
+    out["promoted"] = active(dev, pid)
+    print(f"\nactive is now @{out['promoted']}")
+
+    # a person overrides the gate and canaries the friendly line; live outcomes are the final judge
+    bad = next(c["version"] for c in out["cycles"][0]["candidates"] if c["operator"] == "edit_system_prompt")
+    bad_cfg = {**config.parse(dev.active_version(LOCAL_ORG, pid, config.CONFIG_NAME)["content"]),
+               "system_prompt": f"{BASE_PROMPT} {BAD_LINE}"}
+    v = dev.create_version(LOCAL_ORG, pid, config.dumps(bad_cfg), name=config.CONFIG_NAME, actor="a teammate",
+                           note=f"the friendly line again (like @{bad}), approved by hand")["version"]
+    dev.approve(LOCAL_ORG, pid, config.CONFIG_NAME, v, override_reason="looks friendlier", actor="a teammate")
+    dev.start_canary(LOCAL_ORG, pid, config.CONFIG_NAME, v, 50, actor="a teammate")
+    print(f"\na teammate canaries @{v} (the friendly line) by hand")
+    served = replay(dev, pid, 120, start=9000)
+    actions = monitor.check(dev, LOCAL_ORG, pid)
+    out["monitor"].append(actions)
+    out["injected"], out["final_active"] = v, active(dev, pid)
+    print(f"  live traffic   {served}; monitor: {[(a['action'], a.get('reason', '')) for a in actions]}")
+    print(f"  @{v} is {dev.version(LOCAL_ORG, pid, config.CONFIG_NAME, v)['status']}; active stays @"
+          f"{out['final_active']}")
+    return out
 
 
 def main(argv=None, db=None):

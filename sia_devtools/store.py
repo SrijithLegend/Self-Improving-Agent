@@ -253,7 +253,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS knowledge USING fts5(text, title UNINDEXED, p
 CREATE TABLE IF NOT EXISTS lookup_tables (project_id TEXT NOT NULL, name TEXT NOT NULL, rows TEXT NOT NULL,
     size INTEGER NOT NULL, created REAL, PRIMARY KEY (project_id, name))
 """)]
+MIGRATIONS.append(("devtools-003", """
+ALTER TABLE active_versions ADD COLUMN canary_version INTEGER;
+ALTER TABLE active_versions ADD COLUMN canary_pct INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE active_versions ADD COLUMN canary_started REAL
+"""))
 LESSON_STATES = ("probation", "pinned", "retired")
+MAX_CANARY_PCT = 50
+
+
+def bucket(*parts):
+    """A stable 0-99 bucket for a unit (a user id, a run id): the same unit always lands in the same variant."""
+    return int(hashlib.sha256(":".join(map(str, parts)).encode()).hexdigest(), 16) % 100
 SPLITS = ("dev", "holdout")
 
 RUN_STATUSES = ("running", "success", "error")
@@ -498,7 +509,12 @@ class DevStore:
             if not create:
                 raise NotFound("Project not found.")
             s = validate_settings(settings or {}, custom=self.custom_regex)
+            if "autonomy" not in ((settings or {}).get("loop") or {}):
+                # new projects start where the spec puts them (section 8.1): your own app proposes candidates for a
+                # human; a hosted agent may approve a winner into a canary. Upgraded projects keep autonomy 0.
+                s["loop"]["autonomy"] = 2 if s["kind"] == "agent" else 1
             pid = uuid.uuid4().hex
+            self._check_autonomy(c, pid, 0, s["loop"])
             c.execute("INSERT INTO projects VALUES (?,?,?,?,?)", (pid, org, name, json.dumps(s), time.time()))
             self._audit(c, pid, actor, "project.create", {"name": name})
             return self._project(c, org, pid)
@@ -537,9 +553,39 @@ class DevStore:
         with self._conn(write=True) as c:
             p = self._project(c, org, pid)
             s = validate_settings(settings, p["settings"], custom=self.custom_regex)
+            old, new = p["settings"]["loop"], s["loop"]
+            self._check_autonomy(c, pid, old["autonomy"], new)
             c.execute("UPDATE projects SET settings=? WHERE id=?", (json.dumps(s), pid))
             self._audit(c, pid, actor, "project.settings", settings)
+            if new["autonomy"] != old["autonomy"]:
+                self._audit(c, pid, actor, "loop.autonomy", {"from": old["autonomy"], "to": new["autonomy"]})
+            if new["paused"] and not old["paused"]:
+                self._pause(c, pid, actor)
+            elif old["paused"] and not new["paused"]:
+                self._audit(c, pid, actor, "loop.resumed", {})
             return self._project(c, org, pid)
+
+    @staticmethod
+    def _check_autonomy(c, pid, old, loop):
+        """Raising autonomy to 3 (the loop may release to everyone) needs a real exam: at least 20 holdout examples
+        required for promotion, and at least one critical example that may never regress."""
+        if loop["autonomy"] < 3 or old >= 3:
+            return
+        if loop["holdout_min_examples"] < 20:
+            raise ValidationError("Autonomy 3 needs loop.holdout_min_examples of at least 20.")
+        if not c.execute("""SELECT 1 FROM dataset_examples e JOIN datasets d ON d.id=e.dataset_id WHERE
+                d.project_id=? AND e.critical=1 AND e.status='verified' AND e.removed_in IS NULL""", (pid,)).fetchone():
+            raise ValidationError("Autonomy 3 needs at least one critical example (a case that may never regress).")
+
+    def _pause(self, c, pid, actor):
+        """The kill switch (G7): every canary stops, queued loop work is cancelled, the active versions stay."""
+        stopped = [r["name"] for r in c.execute("SELECT name FROM active_versions WHERE project_id=? AND "
+                                                "canary_version IS NOT NULL", (pid,))]
+        c.execute("UPDATE active_versions SET canary_version=NULL, canary_pct=0, canary_started=NULL WHERE "
+                  "project_id=?", (pid,))
+        cancelled = c.execute("UPDATE jobs SET status='cancelled', finished=? WHERE project_id=? AND status='queued' "
+                              "AND kind IN ('cycle', 'monitor', 'study', 'evaluate')", (time.time(), pid)).rowcount
+        self._audit(c, pid, actor, "loop.paused", {"canaries_stopped": stopped, "jobs_cancelled": cancelled})
 
     # --- runs -----------------------------------------------------------------
     def _run_row(self, pid, r, scrub):
@@ -1376,11 +1422,18 @@ class DevStore:
             self._project(c, org, pid)
             return self._version(c, pid, name, num)
 
-    def active_version(self, org, pid, name="system_prompt"):
+    def active_version(self, org, pid, name="system_prompt", unit=None):
+        """The version production should use. With `unit` (a user id, a session, a run id) and a canary running, the
+        unit's stable bucket decides between the canary and the active version; "variant" says which it got."""
         with self._conn() as c:
             self._project(c, org, pid)
             num = self._active(c, pid, name)
-            return None if num is None else self._version(c, pid, name, num)
+            if num is None:
+                return None
+            canary = self._canary(c, pid, name) if unit is not None else None
+            if canary and bucket(pid, name, unit) < canary["pct"]:
+                return {**self._version(c, pid, name, canary["version"]), "variant": "canary"}
+            return {**self._version(c, pid, name, num), **({"variant": "active"} if unit is not None else {})}
 
     def approve(self, org, pid, name, num, comparison_id=None, override_reason=None, actor=None):
         """Approval needs evidence: a comparison, made with the project's own policy, in which this candidate beat
@@ -1438,10 +1491,111 @@ class DevStore:
             if v["status"] != "approved":
                 raise ValidationError(f"Only approved versions can be activated ({name}@{num} is {v['status']}).")
             before = self._active(c, pid, name)
-            c.execute("INSERT INTO active_versions VALUES (?,?,?,?,?) ON CONFLICT(project_id, name) DO UPDATE SET "
-                      "version=excluded.version, activated=excluded.activated, activated_by=excluded.activated_by",
-                      (pid, name, num, time.time(), actor))
-            self._audit(c, pid, actor, "version.activate", {"name": name, "from": before, "to": num})
+            canary = self._canary(c, pid, name)
+            # activating anything ends a running canary: production is exactly what was just activated
+            c.execute("INSERT INTO active_versions (project_id, name, version, activated, activated_by) VALUES "
+                      "(?,?,?,?,?) ON CONFLICT(project_id, name) DO UPDATE SET version=excluded.version, "
+                      "activated=excluded.activated, activated_by=excluded.activated_by, canary_version=NULL, "
+                      "canary_pct=0, canary_started=NULL", (pid, name, num, time.time(), actor))
+            self._audit(c, pid, actor, "version.activate", {"name": name, "from": before, "to": num,
+                                                            **({"ended_canary": canary["version"]} if canary else {})})
+            return self._version(c, pid, name, num)
+
+    # --- canaries: an approved version serves a share of traffic before everyone gets it --------------------------
+    @staticmethod
+    def _canary(c, pid, name):
+        row = c.execute("SELECT canary_version, canary_pct, canary_started FROM active_versions WHERE project_id=? "
+                        "AND name=?", (pid, name)).fetchone()
+        if not row or row["canary_version"] is None:
+            return None
+        return {"version": row["canary_version"], "pct": row["canary_pct"], "started": row["canary_started"]}
+
+    def canary(self, org, pid, name="system_prompt"):
+        with self._conn() as c:
+            self._project(c, org, pid)
+            return self._canary(c, pid, name)
+
+    def canaries(self, org, pid):
+        with self._conn() as c:
+            self._project(c, org, pid)
+            return [{"name": r["name"], "active": r["version"], "version": r["canary_version"],
+                     "pct": r["canary_pct"], "started": r["canary_started"]} for r in c.execute(
+                "SELECT * FROM active_versions WHERE project_id=? AND canary_version IS NOT NULL", (pid,))]
+
+    def start_canary(self, org, pid, name, num, pct, actor=None):
+        """Serve approved version `num` to pct% of traffic (1-50); the rest stays on the active version."""
+        if isinstance(pct, bool) or not isinstance(pct, int) or not 1 <= pct <= MAX_CANARY_PCT:
+            raise ValidationError(f"canary pct must be an integer from 1 to {MAX_CANARY_PCT}")
+        with self._conn(write=True) as c:
+            self._project(c, org, pid)
+            v = self._version(c, pid, name, num)
+            if v["status"] != "approved":
+                raise ValidationError(f"Only approved versions can be canaried ({name}@{num} is {v['status']}).")
+            active = self._active(c, pid, name)
+            if active is None or active == num:
+                raise ValidationError("A canary runs next to a different active version; activate one first.")
+            if (running := self._canary(c, pid, name)) and running["version"] != num:
+                raise Conflict(f"{name}@{running['version']} is already in a canary; stop or promote it first.")
+            c.execute("UPDATE active_versions SET canary_version=?, canary_pct=?, canary_started=? WHERE "
+                      "project_id=? AND name=?", (num, pct, time.time(), pid, name))
+            self._audit(c, pid, actor, "canary.started", {"name": name, "version": num, "pct": pct,
+                                                          "active": active})
+            return self._canary(c, pid, name)
+
+    def stop_canary(self, org, pid, name, reason=None, actor=None):
+        """End the canary. Production never left the active version, so nothing else needs undoing."""
+        with self._conn(write=True) as c:
+            self._project(c, org, pid)
+            canary = self._canary(c, pid, name)
+            if not canary:
+                raise NotFound(f"No canary is running for {name}.")
+            c.execute("UPDATE active_versions SET canary_version=NULL, canary_pct=0, canary_started=NULL WHERE "
+                      "project_id=? AND name=?", (pid, name))
+            self._audit(c, pid, actor, "canary.stopped", {"name": name, "version": canary["version"],
+                                                          "reason": _text(reason, "reason", 2000)})
+            return canary
+
+    def promote_canary(self, org, pid, name, actor=None):
+        """The canary version becomes the active one for everyone."""
+        with self._conn() as c:
+            self._project(c, org, pid)
+            canary, before = self._canary(c, pid, name), self._active(c, pid, name)
+        if not canary:
+            raise NotFound(f"No canary is running for {name}.")
+        out = self.activate(org, pid, name, canary["version"], actor=actor)
+        self._audit_now(pid, actor, "canary.promoted", {"name": name, "from": before, "to": canary["version"]})
+        return out
+
+    def variant_stats(self, org, pid, name, num, since, until=None):
+        """Live production numbers for one version in a time window: runs, errors, validator and outcome failures,
+        ratings. Eval runs and child runs don't count."""
+        args = (pid, name, num, since, until if until is not None else 1e18)
+        where = (f"r.project_id=? AND r.parent_id IS NULL AND r.version_name=? AND r.version=? AND r.started>=? AND "
+                 f"r.started<? AND {NOT_EVAL.replace('runs.', 'r.')}")
+        with self._conn() as c:
+            self._project(c, org, pid)
+            row = dict(c.execute(f"""SELECT COUNT(*) runs, COALESCE(SUM(r.status='error'), 0) errors,
+                COALESCE(SUM(EXISTS(SELECT 1 FROM json_each(r.scores) WHERE key LIKE 'validator:%')), 0) validator_runs,
+                COALESCE(SUM(EXISTS(SELECT 1 FROM json_each(r.scores) WHERE key LIKE 'validator:%' AND value=0)), 0)
+                    validator_fails,
+                COALESCE(SUM(json_extract(r.scores, '$.outcome') IS NOT NULL), 0) outcome_runs,
+                COALESCE(SUM(json_extract(r.scores, '$.outcome')=0), 0) outcome_fails FROM runs r WHERE {where}""",
+                                 args).fetchone())
+            fb = c.execute(f"""SELECT COUNT(*) n, COALESCE(SUM(f.rating=-1), 0) bad FROM feedback f JOIN runs r ON
+                r.project_id=f.project_id AND r.id=f.run_id WHERE {where}""", args).fetchone()
+        return {**row, "ratings": fb["n"], "negative_ratings": fb["bad"]}
+
+    def revoke(self, org, pid, name, num, reason, actor=None):
+        """Take back an approval (a canary that failed live): an approved version that isn't active is rejected."""
+        with self._conn(write=True) as c:
+            self._project(c, org, pid)
+            v = self._version(c, pid, name, num)
+            if v["status"] != "approved" or v["active"]:
+                raise Conflict(f"Only an approved version that isn't active can be revoked ({name}@{num}).")
+            c.execute("UPDATE versions SET status='rejected', decided_by=?, decision_reason=?, decided=? "
+                      "WHERE project_id=? AND name=? AND version=?",
+                      (actor, _text(reason, "reason", 2000), time.time(), pid, name, num))
+            self._audit(c, pid, actor, "version.revoke", {"name": name, "version": num, "reason": reason})
             return self._version(c, pid, name, num)
 
     def audit(self, org, pid, limit=100):

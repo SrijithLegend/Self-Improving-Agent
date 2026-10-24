@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -427,6 +427,16 @@ class TableIn(Strict):
 class LoopRunIn(Strict):
     dataset: str = Field("eval", min_length=1, max_length=64)
     operators: list[str] | None = Field(None, max_length=9, description="Try these operators instead of choosing.")
+
+
+class CanaryIn(Strict):
+    pct: int = Field(10, ge=1, le=50, description="Share of traffic (%) the canary version serves.")
+    reviewer: str | None = Field(None, max_length=200)
+
+
+class CanaryStopIn(Strict):
+    reason: str | None = Field(None, max_length=2000)
+    reviewer: str | None = Field(None, max_length=200)
 
 
 class OutcomeIn(Strict):
@@ -984,7 +994,21 @@ def delete_table(project_id: str, name: str, t=Depends(tenant)):
 @app.get("/v1/projects/{project_id}/loop")
 def get_loop(project_id: str, t=Depends(tenant)):
     p = dev.project(t["id"], project_id)
-    return {**p["settings"]["loop"], "kind": p["settings"]["kind"]}
+    return {**p["settings"]["loop"], "kind": p["settings"]["kind"], "canaries": dev.canaries(t["id"], project_id)}
+
+
+@app.post("/v1/projects/{project_id}/loop/pause")
+def pause_loop(project_id: str, t=Depends(tenant)):
+    """The kill switch: no more autonomous changes. Every canary stops, queued loop jobs are cancelled, and the
+    active versions stay exactly as they are."""
+    dev.update_project(t["id"], project_id, {"loop": {"paused": True}}, actor=actor(t))
+    return get_loop(project_id, t)
+
+
+@app.post("/v1/projects/{project_id}/loop/resume")
+def resume_loop(project_id: str, t=Depends(tenant)):
+    dev.update_project(t["id"], project_id, {"loop": {"paused": False}}, actor=actor(t))
+    return get_loop(project_id, t)
 
 
 @app.patch("/v1/projects/{project_id}/loop")
@@ -1092,9 +1116,24 @@ def list_versions(project_id: str, name: str | None = None, t=Depends(tenant)):
 
 
 @app.get("/v1/projects/{project_id}/versions/active")
-def active_version(project_id: str, name: str = "system_prompt", t=Depends(key_auth)):
-    """The version production should use (null if none). Readable with ingest keys."""
-    return dev.active_version(t["id"], project_id, name)
+def active_version(project_id: str, name: str = "system_prompt", unit: str | None = Query(None, max_length=200),
+                   t=Depends(key_auth)):
+    """The version production should use (null if none). Readable with ingest keys. With `unit` (a user or session
+    id) and a canary running, the unit's stable bucket picks the canary or the active version ("variant")."""
+    return dev.active_version(t["id"], project_id, name, unit)
+
+
+@app.post("/v1/projects/{project_id}/versions/{name}/canary/promote")
+def promote_canary(project_id: str, name: str, body: ActivateIn | None = None, t=Depends(tenant)):
+    """Give the canary version to everyone."""
+    return dev.promote_canary(t["id"], project_id, name, actor(t, body.reviewer if body else None))
+
+
+@app.post("/v1/projects/{project_id}/versions/{name}/canary/stop")
+def stop_canary(project_id: str, name: str, body: CanaryStopIn | None = None, t=Depends(tenant)):
+    """End the canary; everyone stays on the active version."""
+    body = body or CanaryStopIn()
+    return dev.stop_canary(t["id"], project_id, name, body.reason, actor(t, body.reviewer))
 
 
 @app.get("/v1/projects/{project_id}/versions/{name}/{version}")
@@ -1111,6 +1150,12 @@ def approve_version(project_id: str, name: str, version: int, body: ApproveIn, t
 @app.post("/v1/projects/{project_id}/versions/{name}/{version}/reject")
 def reject_version(project_id: str, name: str, version: int, body: RejectIn, t=Depends(tenant)):
     return dev.reject(t["id"], project_id, name, version, body.reason, actor(t, body.reviewer))
+
+
+@app.post("/v1/projects/{project_id}/versions/{name}/{version}/canary")
+def start_canary(project_id: str, name: str, version: int, body: CanaryIn, t=Depends(tenant)):
+    """Serve an approved version to pct% of traffic next to the active one (people can do this at any autonomy)."""
+    return dev.start_canary(t["id"], project_id, name, version, body.pct, actor(t, body.reviewer))
 
 
 @app.post("/v1/projects/{project_id}/versions/{name}/{version}/activate")
