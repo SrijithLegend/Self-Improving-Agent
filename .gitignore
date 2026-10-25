@@ -15,3 +15,4 @@ brag-output/
 .claude/
 skills-lock.json
 .coverage
+.curve-db/

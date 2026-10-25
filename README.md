@@ -160,6 +160,21 @@ wins on the held-out cases and is promoted through a canary. The "friendly" prom
 rejected, and when a person forces it into a canary anyway, live outcomes roll it back.
 
 <!-- LOOP-RESULTS -->
+**On a real model.** `python examples/loop_demo.py --curve` runs the loop for 6 cycles, 3 times over, on 72 refund
+cases with `gemma-4-26b-a4b-it` (free tier, thinking set to minimal). The score is the share of held-out cases
+answered correctly; each repeat uses a different split.
+
+| Repeat | Held out | Start | After 1 | After 2 | After 3 | After 4 | After 5 | After 6 | Promoted | Rolled back | Calls |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 26 | 0.769 | 0.846 | 0.846 | 0.846 | 0.846 | 0.846 | 0.846 | 1 | 0 | 375 |
+| 2 | 28 | 0.839 | 0.839 | 0.839 | 0.929 | 0.929 | 0.929 | 0.929 | 1 | 0 | 686 |
+| 3 | 22 | 0.955 | 0.955 | 0.955 | 0.955 | 0.955 | 0.955 | 0.955 | 0 | 0 | 1,090 |
+
+Two of three repeats improved on held-out cases (+0.077 and +0.090), each through one change that also won its live
+canary. In the third, the starting version already missed only one case, and all six cycles' candidates were
+rejected on the held-out cases. No critical case regressed. That is not yet the "improves in every repeat" result
+we'd need to claim more; raw numbers are in
+[`docs/loop_results/curve.json`](docs/loop_results/curve.json).
 
 ## Commands
 

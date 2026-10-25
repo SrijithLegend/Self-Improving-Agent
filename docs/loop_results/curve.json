@@ -1,0 +1,298 @@
+{
+  "model": "gemma-4-26b-a4b-it",
+  "cases": 72,
+  "repeats": [
+    {
+      "repeat": 0,
+      "holdout_n": 26,
+      "start": 0.7692,
+      "scores": [
+        0.8462,
+        0.8462,
+        0.8462,
+        0.8462,
+        0.8462,
+        0.8462
+      ],
+      "promotions": 1,
+      "rollbacks": 0,
+      "critical_regressions": 0,
+      "calls": 375,
+      "cycles": [
+        {
+          "outcome": "canary_started",
+          "calls": 164,
+          "holdout": {
+            "baseline": 0.7692,
+            "candidate": 0.8462,
+            "verdict": "improved",
+            "reason": "mean gain +0.077 beats the threshold 0.060 (max of min_gain, z*SE)"
+          },
+          "tried": [
+            "swap_exemplars"
+          ],
+          "canary": {
+            "served": {
+              "active": 19,
+              "canary": 21
+            },
+            "monitor": [
+              "promoted",
+              "watching"
+            ]
+          }
+        },
+        {
+          "outcome": "no_improvement",
+          "calls": 21,
+          "holdout": null,
+          "tried": [
+            "tune_retrieval"
+          ]
+        },
+        {
+          "outcome": "no_improvement",
+          "calls": 40,
+          "holdout": null,
+          "tried": [
+            "tune_retrieval",
+            "swap_exemplars"
+          ]
+        },
+        {
+          "outcome": "no_improvement",
+          "calls": 21,
+          "holdout": null,
+          "tried": [
+            "swap_exemplars"
+          ]
+        },
+        {
+          "outcome": "no_improvement",
+          "calls": 22,
+          "holdout": null,
+          "tried": [
+            "edit_system_prompt"
+          ]
+        },
+        {
+          "outcome": "no_improvement",
+          "calls": 41,
+          "holdout": null,
+          "tried": [
+            "edit_system_prompt",
+            "swap_exemplars"
+          ]
+        }
+      ],
+      "final": 0.8462
+    },
+    {
+      "repeat": 1,
+      "holdout_n": 28,
+      "start": 0.8393,
+      "scores": [
+        0.8393,
+        0.8393,
+        0.9286,
+        0.9286,
+        0.9286,
+        0.9286
+      ],
+      "promotions": 1,
+      "rollbacks": 0,
+      "critical_regressions": 0,
+      "calls": 686,
+      "cycles": [
+        {
+          "outcome": "rejected_on_holdout",
+          "calls": 185,
+          "holdout": {
+            "baseline": 0.8393,
+            "candidate": 0.875,
+            "verdict": "inconclusive",
+            "reason": "mean change +0.036 is within evaluation noise (z*SE = 0.036)"
+          },
+          "tried": [
+            "swap_exemplars",
+            "edit_system_prompt"
+          ]
+        },
+        {
+          "outcome": "rejected_on_holdout",
+          "calls": 121,
+          "holdout": {
+            "baseline": 0.8393,
+            "candidate": 0.875,
+            "verdict": "inconclusive",
+            "reason": "mean change +0.036 is within evaluation noise (z*SE = 0.036)"
+          },
+          "tried": [
+            "swap_exemplars"
+          ]
+        },
+        {
+          "outcome": "canary_started",
+          "calls": 142,
+          "holdout": {
+            "baseline": 0.8393,
+            "candidate": 0.9286,
+            "verdict": "improved",
+            "reason": "mean gain +0.089 beats the threshold 0.052 (max of min_gain, z*SE)"
+          },
+          "tried": [
+            "edit_system_prompt",
+            "rewrite_playbook"
+          ],
+          "canary": {
+            "served": {
+              "active": 17,
+              "canary": 23
+            },
+            "monitor": [
+              "promoted",
+              "watching"
+            ]
+          }
+        },
+        {
+          "outcome": "no_improvement",
+          "calls": 42,
+          "holdout": null,
+          "tried": [
+            "edit_system_prompt",
+            "rewrite_playbook"
+          ]
+        },
+        {
+          "outcome": "no_improvement",
+          "calls": 87,
+          "holdout": null,
+          "tried": [
+            "edit_system_prompt",
+            "toggle_tools"
+          ]
+        },
+        {
+          "outcome": "no_improvement",
+          "calls": 41,
+          "holdout": null,
+          "tried": [
+            "edit_system_prompt",
+            "tune_retrieval"
+          ]
+        }
+      ],
+      "final": 0.9286
+    },
+    {
+      "repeat": 2,
+      "holdout_n": 22,
+      "start": 0.9545,
+      "scores": [
+        0.9545,
+        0.9545,
+        0.9545,
+        0.9545,
+        0.9545,
+        0.9545
+      ],
+      "promotions": 0,
+      "rollbacks": 0,
+      "critical_regressions": 0,
+      "calls": 1090,
+      "cycles": [
+        {
+          "outcome": "rejected_on_holdout",
+          "calls": 255,
+          "holdout": {
+            "baseline": 0.9545,
+            "candidate": 0.8864,
+            "verdict": "regressed",
+            "reason": "mean change -0.068 is below -0.037"
+          },
+          "tried": [
+            "edit_system_prompt",
+            "toggle_tools"
+          ]
+        },
+        {
+          "outcome": "rejected_on_holdout",
+          "calls": 186,
+          "holdout": {
+            "baseline": 0.9545,
+            "candidate": 0.9091,
+            "verdict": "regressed",
+            "reason": "mean change -0.045 is below -0.031"
+          },
+          "tried": [
+            "edit_system_prompt",
+            "rewrite_playbook"
+          ]
+        },
+        {
+          "outcome": "rejected_on_holdout",
+          "calls": 185,
+          "holdout": {
+            "baseline": 0.9545,
+            "candidate": 0.9091,
+            "verdict": "regressed",
+            "reason": "mean change -0.045 is below -0.031"
+          },
+          "tried": [
+            "swap_exemplars",
+            "edit_system_prompt"
+          ]
+        },
+        {
+          "outcome": "rejected_on_holdout",
+          "calls": 141,
+          "holdout": {
+            "baseline": 0.9545,
+            "candidate": 0.9773,
+            "verdict": "inconclusive",
+            "reason": "mean change +0.023 is within evaluation noise (z*SE = 0.023)"
+          },
+          "tried": [
+            "toggle_tools"
+          ]
+        },
+        {
+          "outcome": "rejected_on_holdout",
+          "calls": 185,
+          "holdout": {
+            "baseline": 0.9545,
+            "candidate": 0.9091,
+            "verdict": "regressed",
+            "reason": "mean change -0.045 is below -0.031"
+          },
+          "tried": [
+            "edit_system_prompt",
+            "swap_exemplars"
+          ]
+        },
+        {
+          "outcome": "rejected_on_holdout",
+          "calls": 116,
+          "holdout": {
+            "baseline": 0.9545,
+            "candidate": 0.8864,
+            "verdict": "regressed",
+            "reason": "mean change -0.068 is below -0.037"
+          },
+          "tried": [
+            "edit_system_prompt"
+          ]
+        }
+      ],
+      "final": 0.9545
+    }
+  ],
+  "summary": {
+    "mean_gain": 0.0554,
+    "spread": 0.0893,
+    "repeats_done": 3,
+    "improved_in_all": false,
+    "critical_regressions": 0
+  }
+}
