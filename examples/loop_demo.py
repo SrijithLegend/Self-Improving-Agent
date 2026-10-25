@@ -261,16 +261,23 @@ class Paced:
         self.gap, self.last = 60.0 / rpm, [0.0]
 
     def __call__(self, provider, key, model):
-        from sia.llm import LLM
+        from sia.llm import LLM, Unavailable
         llm, gap, last = LLM(provider, key, model), self.gap, self.last
         post = llm._post
 
         def paced(*a, **k):
-            wait = last[0] + gap - time.time()
-            if wait > 0:
-                time.sleep(wait)
-            last[0] = time.time()
-            return post(*a, **k)
+            # a free-tier model stalls now and then; a run of hours should wait it out, not end on it
+            for attempt in range(6):
+                wait = last[0] + gap - time.time()
+                if wait > 0:
+                    time.sleep(wait)
+                last[0] = time.time()
+                try:
+                    return post(*a, **k)
+                except Unavailable:
+                    if attempt == 5:
+                        raise
+                    time.sleep(30 * (attempt + 1))
         llm._post = paced
         return llm
 
