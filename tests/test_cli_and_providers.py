@@ -55,6 +55,30 @@ def test_anthropic_and_openai_compatible_requests():
         g.text("s", "p")
 
 
+def test_a_reply_that_never_finishes_times_out(monkeypatch):
+    import sia.llm
+    g = LLM("gemini", "k", "m")
+    g.tries = 1
+    sent = mock(g, lambda r: httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}))
+    assert g.text("s", "p") == "ok"
+    assert json.loads(sent[0].content)["generationConfig"]["maxOutputTokens"] == 4096  # no runaway generations
+    assert "thinkingConfig" not in json.loads(sent[0].content)["generationConfig"]
+    g.thinking = "minimal"
+    g.text("s", "p")
+    assert json.loads(sent[1].content)["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "minimal"}
+    monkeypatch.setattr(sia.llm, "CALL_DEADLINE", -1)  # every reply is already past the deadline
+    with pytest.raises(LLMError, match="no complete reply"):
+        g.text("s", "p")
+
+
+def test_config_thinking_level(tmp_path):
+    s = SIAClient(project="t", local=str(tmp_path / "t.db")).project_settings()
+    ok = config.default_config(model={**config.DEFAULT_CONFIG["model"], "thinking": "minimal"})
+    assert config.validate(ok, s)["model"]["thinking"] == "minimal"
+    with pytest.raises(ValidationError, match="model.thinking"):
+        config.validate(config.default_config(model={**config.DEFAULT_CONFIG["model"], "thinking": "lots"}), s)
+
+
 def test_cli_everyday_commands(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     db = str(tmp_path / "c.db")

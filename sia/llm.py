@@ -22,6 +22,7 @@ DEFAULT_MODELS = {"gemini": "gemini-flash-latest,gemini-flash-lite-latest", "ant
 # model names go into request URLs (Gemini) and come from a request header, so only plain names are accepted
 MODEL_RX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$")
 MAX_FALLBACKS = 4
+CALL_DEADLINE = 120  # seconds for one whole HTTP reply
 
 
 class LLMError(Exception):
@@ -61,6 +62,7 @@ class LLM:
         self.provider, self.api_key = provider, api_key
         self.base_url = (base_url or OPENAI_COMPATIBLE.get(provider, "")).rstrip("/")
         self.calls = 0
+        self.thinking = None  # Gemini thinkingLevel: None (the model's default), minimal, low, medium, high
         self.last_usage = {}  # {"model", "prompt_tokens", "completion_tokens"} of the latest successful call
         self.http = httpx.Client(timeout=httpx.Timeout(90, connect=10))  # no redirects: they could reach elsewhere
 
@@ -76,9 +78,11 @@ class LLM:
     def _text(self, model, system, prompt, temperature, as_json):
         if self.provider == "gemini":
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-            gen = {"temperature": temperature}
+            gen = {"temperature": temperature, "maxOutputTokens": 4096}
             if as_json:
                 gen["responseMimeType"] = "application/json"
+            if self.thinking:  # how much a thinking model reasons first; "minimal" keeps Gemma fast
+                gen["thinkingConfig"] = {"thinkingLevel": self.thinking}
             data = self._post(url, {"x-goog-api-key": self.api_key}, {
                 "systemInstruction": {"parts": [{"text": system}]},
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -125,22 +129,35 @@ class LLM:
         tries = self.tries
         for attempt in range(tries):
             try:
-                r = self.http.post(url, headers=headers, json=body)
+                status, resp_headers, content = self._send(url, headers, body)
             except httpx.HTTPError as e:
                 if attempt == tries - 1:
                     raise Unavailable(self._clean(f"Network error calling {self.provider}: {e}"))
                 time.sleep(2 ** attempt)
                 continue
             # Free tiers rate-limit hard; back off and retry instead of failing the task.
-            if r.status_code in (429, 500, 502, 503, 504) and attempt < tries - 1:
-                retry_after = r.headers.get("retry-after", "")
+            if status in (429, 500, 502, 503, 504) and attempt < tries - 1:
+                retry_after = resp_headers.get("retry-after", "")
                 time.sleep(min(float(retry_after) if retry_after.isdigit() else 2 ** (attempt + 1), 60))
                 continue
-            if r.status_code in (429, 500, 502, 503, 504):
-                raise Unavailable(self._clean(f"{self.provider} error {r.status_code}: {r.text[:300]}"))
-            if r.status_code >= 400:
-                raise LLMError(self._clean(f"{self.provider} error {r.status_code}: {r.text[:500]}"))
-            return r.json()
+            text = content.decode("utf-8", "replace")
+            if status in (429, 500, 502, 503, 504):
+                raise Unavailable(self._clean(f"{self.provider} error {status}: {text[:300]}"))
+            if status >= 400:
+                raise LLMError(self._clean(f"{self.provider} error {status}: {text[:500]}"))
+            return json.loads(text)
+
+    def _send(self, url, headers, body):
+        """POST and read the whole reply within CALL_DEADLINE seconds. httpx's read timeout only bounds the gap
+        between chunks, so a reply that trickles in (or a model generating for minutes) would never time out."""
+        t0 = time.monotonic()
+        with self.http.stream("POST", url, headers=headers, json=body) as r:
+            chunks = []
+            for chunk in r.iter_bytes():
+                chunks.append(chunk)
+                if time.monotonic() - t0 > CALL_DEADLINE:
+                    raise httpx.ReadTimeout(f"no complete reply within {CALL_DEADLINE} s")
+            return r.status_code, r.headers, b"".join(chunks)
 
     def _clean(self, text):
         """Provider errors are returned to the caller; never let them carry the key back out (or into logs)."""

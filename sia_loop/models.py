@@ -29,4 +29,6 @@ def make(provider, chain, key=None):
 
 
 def for_config(cfg, key=None):
-    return make(cfg["model"]["provider"], cfg["model"]["chain"], key)
+    llm = make(cfg["model"]["provider"], cfg["model"]["chain"], key)
+    llm.thinking = cfg["model"].get("thinking")
+    return llm

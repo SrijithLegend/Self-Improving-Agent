@@ -28,8 +28,9 @@ DEFAULT_CONFIG = {
     },
     "validators": [],             # checks run on every answer: {"type": "regex"|"json_schema", "name", ...}
     "revise": {"max_revisions": 2, "pass_score": 0.75, "critic": "self"},  # inner loop; never used for promotion
-    "model": {"provider": "gemini", "chain": ["gemini-flash-latest"], "temperature": 0.3},
+    "model": {"provider": "gemini", "chain": ["gemini-flash-latest"], "temperature": 0.3, "thinking": None},
 }
+THINKING_LEVELS = (None, "minimal", "low", "medium", "high")
 MAX_CHARS, MAX_LESSONS, MAX_EXEMPLARS, MAX_STEPS, MAX_MACROS, MAX_VALIDATORS = 50_000, 12, 6, 12, 10, 10
 MAX_PLAYBOOK_WORDS, MAX_PROMPT_CHARS = 600, 20_000
 BUILTIN_TOOLS = ("search_knowledge", "calculator", "lookup_table", "http_get")
@@ -165,6 +166,8 @@ def validate(cfg, settings, lesson_ids=(), example_splits=None):
     if bad := [x for x in m["chain"] if x not in loop["allowed_models"]]:
         raise ValidationError(f"models {bad} are not allowed for this project (settings.loop.allowed_models)")
     _num(m["temperature"], "model.temperature", 0, 2)
+    if m["thinking"] not in THINKING_LEVELS:
+        raise ValidationError("model.thinking must be null or one of minimal, low, medium, high (Gemini only)")
 
     if len(dumps(out)) > MAX_CHARS:
         raise ValidationError(f"agent_config must be at most {MAX_CHARS:,} characters as JSON")

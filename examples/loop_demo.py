@@ -244,7 +244,8 @@ def real_setup(dev, cases, holdout_pct=40):
                                 tools={"enabled": [], "macros": [], "max_steps": 2},
                                 retrieval={"enabled": False, "k": 0, "max_chars_per_chunk": 1000},
                                 revise={"max_revisions": 0, "pass_score": 0.75, "critic": "self"},
-                                model={"provider": "gemini", "chain": [REAL_MODEL], "temperature": 0})
+                                model={"provider": "gemini", "chain": [REAL_MODEL], "temperature": 0,
+                                       "thinking": "minimal" if REAL_MODEL.startswith("gemma") else None})
     v = dev.create_version(LOCAL_ORG, p["id"], config.dumps(cfg), name=config.CONFIG_NAME, actor="demo")
     dev.approve(LOCAL_ORG, p["id"], config.CONFIG_NAME, v["version"], actor="demo")
     dev.activate(LOCAL_ORG, p["id"], config.CONFIG_NAME, v["version"], actor="demo")
