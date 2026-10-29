@@ -18,7 +18,6 @@ Include what you found, how to reproduce it and the impact. You should get an an
 | Huge or endless request bodies | Bodies over 4 MB get `413`, counted on the bytes actually received, so a chunked upload without `Content-Length` can't get around it | `sia/security.py: BodyLimit` |
 | One customer tying up the server with model calls | At most 2 model-calling requests per organization and 16 in total run at once; the rest get `429` | `sia/security.py: Slots` |
 | Plan-limit abuse | Plan limits (projects, runs, examples, retention) are enforced server-side (`402`) | `sia/api.py` |
-| Fake payments | A plan changes only after the Razorpay signature checks out and Razorpay itself confirms the order is fully paid, or a signed webhook says so; payments are idempotent | `sia/billing.py`, `test_billing.py` |
 | Cross-site scripting | Every value the dashboard shows is HTML-escaped; ids are restricted to `[A-Za-z0-9_.:-]`. A strict Content-Security-Policy allows only the page's own inline script (by hash) and no `unsafe-inline` scripts | `sia/dashboard.html`, `sia/security.py` |
 | Clickjacking, MIME sniffing, referrer leaks | `X-Frame-Options: DENY`, `frame-ancestors 'none'`, `nosniff`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, COOP/CORP | `sia/security.py: COMMON_HEADERS` |
 | Downgrade to plain HTTP | `Strict-Transport-Security` on every https response | `guard_and_log` |
@@ -30,7 +29,7 @@ Include what you found, how to reproduce it and the impact. You should get an an
 | Prompt injection into the self-improving loop | Lessons wait in probation and are scrubbed of instruction overrides, URLs, emails and code; only a config that wins on held-out cases (never seen by the optimizer) and survives a live canary reaches production; the agent can't grade itself | `sia_loop/memory.py`, `sia_loop/promoter.py`, `docs/AUDIT.md` section 4 |
 | Agent-made tools running code | Macros are data: regex-filled templates and pipelines of built-in tools; nothing the agent writes is executed | `sia_loop/tools/macro.py` |
 | Forged webhooks | Deliveries are HMAC-SHA256 signed (`X-SIA-Signature`) with a per-project secret and a timestamp | `sia_loop/notify.py` |
-| Personal data in stored runs | Redaction (secrets, including GitHub, Slack, AWS and Razorpay live keys; cards; and opt-in email, phone, Aadhaar, PAN and your own patterns) runs in the SDK before data leaves your app and again on the server | `sia_devtools/store.py` |
+| Personal data in stored runs | Redaction (secrets, including GitHub, Slack, AWS and Razorpay-style live keys; cards; and opt-in email, phone, Aadhaar, PAN and your own patterns) runs in the SDK before data leaves your app and again on the server | `sia_devtools/store.py` |
 | The keyless local mode leaking onto the network | It answers only loopback clients addressed as localhost, refuses requests that came through a proxy, and `sia dashboard` binds to 127.0.0.1 | `key_auth` |
 | SQL injection | All values are bound parameters; the few dynamic SQL fragments are fixed strings or whitelisted column names | `bandit` in CI |
 | Vulnerable dependencies | `pip-audit` and `bandit` run in CI on every push | `.github/workflows/tests.yml` |
@@ -52,7 +51,7 @@ Do these before you put the server on the internet:
 8. **Back up the database** (`/data` in Docker) and restrict who can read it: it holds your customers' runs.
 9. **Watch the security log.** Lines from the `sia.security` logger (`invalid_api_key`, `invalid_admin_key`,
    `invalid_webhook_signature`) carry the IP, path and request id. Alert on spikes.
-10. **Rotate** the admin key, Razorpay secrets and any customer key you suspect leaked (`POST /v1/keys/rotate`).
+10. **Rotate** the admin key and any customer key you suspect leaked (`POST /v1/keys/rotate`).
 11. **Keep dependencies current.** Rebuild the image regularly; CI's `pip-audit` fails when a known vulnerability appears.
 
 ## Scaling

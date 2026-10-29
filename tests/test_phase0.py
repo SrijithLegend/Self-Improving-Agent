@@ -103,7 +103,6 @@ def test_delete_org_leaves_no_rows(tmp_path, monkeypatch):
     from sia_loop import jobs, notify
     jobs.enqueue(api.dev, a["tenant_id"], aid, "noop")
     notify.secret(api.dev, a["tenant_id"], aid)
-    api.store.add_payment("order_1", a["tenant_id"], "pro", 100, "INR")
     other = {"Authorization": f"Bearer {b['api_key']}"}
     keep = c.post("/v1/projects", json={"name": "p"}, headers=other).json()["id"]
 

@@ -29,17 +29,15 @@ environment.
 sia doctor --backup-dir /data/backups
 ```
 
-One PASS / WARN / FAIL line per check (admin key, allowed hosts, trusted proxies, contact email, Razorpay keys and
-webhook secret, database writable and intact, a backup from the last 26 hours, real prices). It exits 1 on any
-FAIL. Test-mode Razorpay keys and placeholder prices are WARN: fine for the beta, not for live payments.
+One PASS / WARN / FAIL line per check (admin key, allowed hosts, trusted proxies, contact email, database writable and
+intact, a backup from the last 26 hours). It exits 1 on any FAIL.
 
 ## Daily maintenance
 
 `sia maintenance` deletes what has outlived its retention, including in idle projects:
 
-- runs older than the plan's `retention_days` (or the project's shorter setting); an expired paid plan counts as Free
+- runs older than the plan's `retention_days` (or the project's shorter setting)
 - rejected access requests 90 days after the decision
-- payment orders still `created` (never paid) after 30 days
 
 It is safe to run any number of times and prints one JSON line with the counts. Run it daily, after the backup:
 
@@ -130,5 +128,4 @@ python -c "from sia.store import Store; print(Store('/data/sia.db').create_key('
    Anything but `[('ok',)]` means restore the newest good backup (above).
 4. Logs are JSON lines on stdout: the `sia.access` logger has one line per request with a `request_id`, which a
    customer sees in the `X-Request-ID` header and in 500 responses. Search for it to find the stack trace.
-5. When it's back, post what happened and how long it lasted to affected customers. Downtime over 24 hours in a paid
-   period qualifies for a pro-rata refund (`web/refund.html`).
+5. When it's back, post what happened and how long it lasted to affected users.

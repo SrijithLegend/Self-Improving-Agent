@@ -66,9 +66,8 @@
         <tr><th scope="row">Your SIA API keys, stored only as a SHA-256 hash and a short prefix</th><td>To check who is calling. We can't read your keys back.</td><td>Until you revoke them or close the account</td></tr>
         <tr><th scope="row">What your app sends: runs (inputs, outputs, timings, errors), feedback, datasets, evaluations and prompt versions</th><td>To show them in the dashboard and run the evaluations you ask for</td><td>Runs: 14, 90 or 365 days depending on plan, or less if you set a shorter retention. The rest: until you delete it.</td></tr>
         <tr><th scope="row">Managed agents: documents, answers, lessons, examples and playbooks</th><td>So the agent can learn and you can inspect what it learned</td><td>Until you delete the agent</td></tr>
-        <tr><th scope="row">Usage counts (calls per agent and month)</th><td>Plan limits and billing</td><td>Until you close the account</td></tr>
-        <tr><th scope="row">Payments: Razorpay order and payment IDs, plan, amount, status and date</th><td>To confirm payments and keep accounting records</td><td>As long as tax law requires</td></tr>
-        <tr><th scope="row">Server logs: method, path, status, duration, organization and request ID. Failed key checks and bad payment signatures are also logged with the IP address.</th><td>To keep the service running and detect abuse</td><td>Up to 30 days</td></tr>
+        <tr><th scope="row">Usage counts (calls per agent and month)</th><td>Plan limits</td><td>Until you close the account</td></tr>
+        <tr><th scope="row">Server logs: method, path, status, duration, organization and request ID. Failed key checks are also logged with the IP address.</th><td>To keep the service running and detect abuse</td><td>Up to 30 days</td></tr>
       </tbody>
     </table>
   </div>
@@ -80,15 +79,11 @@
     that one request and never store or log it. The text of that request goes to the provider you chose (for
     example Google, Anthropic or OpenAI), under your agreement with them.</p>
 
-  <h2>Payments</h2>
-  <p>Payments are handled by <a href="https://razorpay.com/privacy/" target="_blank" rel="noopener">Razorpay<span class="sr"> (opens in a new tab)</span></a>.
-    Your card, UPI or bank details go to Razorpay, never to our server.</p>
-
   <h2>Where it is stored and who else sees it</h2>
   <p>Hosted data lives in one database on the server that runs the service. We will name the hosting provider and
     region on this page before the hosted service opens.</p>
   <p>We don't sell your data or use it for advertising. The only other parties that process it are the hosting
-    provider, Razorpay for payments and the model provider you choose. We share data with authorities only when
+    provider and the model provider you choose. We share data with authorities only when
     Indian law requires it.</p>
 
   <h2>Deleting your data</h2>
@@ -122,7 +117,6 @@
     <li><a href="/docs">Docs</a></li>
     <li><a href="/privacy" aria-current="page">Privacy</a></li>
     <li><a href="/terms">Terms</a></li>
-    <li><a href="/refund">Refunds</a></li>
     <li><a data-contact-link href="https://github.com/SrijithLegend/Self-Improving-Agent/issues">Contact</a></li>
   </ul>
 </footer>

@@ -192,14 +192,6 @@ label input[type="checkbox"] { margin-right: 8px; accent-color: var(--accent); }
 .login { width: 100%; max-width: 440px; position: relative; padding: 32px; }
 .login .brand { padding-bottom: 28px; }
 
-/* plans */
-.plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-bottom: 16px; }
-.plan { background: var(--surface); border: 1px solid var(--line); padding: 22px; display: flex; flex-direction: column; gap: 12px; position: relative; }
-.plan.cur { border-color: var(--accent); }
-.plan .price { font: 500 var(--t-1)/1.1 var(--f-display); font-variation-settings: "opsz" 96, "SOFT" 30; letter-spacing: -.02em; }
-.plan .price small { font: var(--t-4) var(--f-mono); color: var(--muted); letter-spacing: 0; }
-.plan ul { margin: 0; padding-left: 18px; color: var(--ink-2); }
-.plan button { margin-top: auto; justify-content: center; }
 .callout { border: 1px solid var(--accent); background: var(--accent-soft); color: var(--ink); padding: 13px 15px; margin-bottom: 16px; }
 .callout.bad { border-color: var(--bad); background: var(--bad-bg); }
 .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
@@ -313,7 +305,7 @@ const LOGO = '<svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><path d="
 const BRAND = `<a class="brand" href="/" title="SIA home">${LOGO}<b>sia</b><small>DevTools</small></a>`;
 const NAV = [["Observe", [["overview", "Overview"], ["runs", "Runs"]]],
              ["Improve", [["datasets", "Datasets"], ["evals", "Evaluations"], ["lab", "Improvement lab"], ["loop", "Self-improving loop"]]],
-             ["Account", [["project", "Project & keys"], ["usage", "Usage"], ["billing", "Plans & billing"]]]];
+             ["Account", [["project", "Project & keys"], ["usage", "Usage"]]]];
 
 function shell(view, body) {
   const opts = S.projects.map((p) => `<option value="${esc(p.id)}" ${p.id === S.pid ? "selected" : ""}>${esc(p.name)}</option>`).join("");
@@ -398,39 +390,6 @@ V.overview = async () => {
   </div>
   <div class="card flush"><h2 class="label">Recent evaluations</h2>${evalTable(ev)}</div>`;
 };
-
-V.billing = async () => {
-  const b = await api("/billing");
-  const money = (p) => new Intl.NumberFormat("en-IN", { style: "currency", currency: b.currency, maximumFractionDigits: 0 }).format(p / 100);
-  const feats = (l) => [`${int(l.projects)} project${l.projects > 1 ? "s" : ""}`, `${int(l.runs_per_month)} runs / month${l.overage ? `, up to ${int(l.runs_per_month * l.hard_cap)}` : ""}`,
-                        `${int(l.examples_per_dataset)} examples per dataset`, `${l.retention_days}-day run history`];
-  const tiers = [["free", "Free", 0, "Try it on one project."], ["pro", "Pro", b.prices.pro, "For a team shipping one product."],
-                 ["team", "Team", b.prices.team, "Several products, longer history."]];
-  const until = b.paid_until ? new Date(b.paid_until * 1000).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" }) : null;
-  return `<div class="head"><div><h1>Plans & billing</h1><p class="sub">Pay for 30 days at a time with Razorpay (cards, UPI, netbanking, wallets). Your card details go to Razorpay, never to this server.</p></div></div>
-  ${S.me.local_mode ? `<div class="callout">Local mode has no limits and no billing. Plans apply to the hosted service.</div>` :
-    !b.enabled ? `<div class="callout">Payments are not configured on this server yet. An admin sets <code>RAZORPAY_KEY_ID</code> and <code>RAZORPAY_KEY_SECRET</code> to enable them.</div>` : ""}
-  <div class="card"><div class="row"><div><h2 class="label">Current plan</h2><div style="font:500 var(--t-2) var(--f-display);text-transform:capitalize">${esc(b.plan)}</div>
-    <div class="muted">${until ? `Paid through ${esc(until)}. Paying again adds 30 days.` : b.plan === "free" ? "No paid period." : "No expiry."}</div></div></div></div>
-  <div class="plans">${tiers.map(([k, name, price, blurb]) => `<div class="plan ${b.plan === k ? "cur" : ""}">
-    <div class="row"><b style="font:500 var(--t-2) var(--f-display)">${name}</b>${b.plan === k ? pill("current", "blue") : ""}</div>
-    <div class="price">${price ? money(price) : money(0)} <small>${price ? "/ 30 days" : "forever"}</small></div>
-    <div class="muted">${blurb}</div><ul>${feats(b.plans[k]).map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
-    ${k === "free" ? "" : `<button class="${b.plan === k ? "" : "primary"}" data-act="pay" data-plan="${k}" ${b.enabled ? "" : "disabled"}>${b.plan === k ? "Extend 30 days" : "Upgrade to " + name}</button>`}
-  </div>`).join("")}</div>
-  <p class="muted mono">Prices are early placeholders and may change. Payments are confirmed with Razorpay before the plan changes. Passes don't renew on their own. <a href="/refund" target="_blank" rel="noopener">Refund policy</a>.</p>
-  <div class="card flush"><h2 class="label">Payment history</h2>${b.payments.length ? `<div class="tbl"><table><tr><th>Date</th><th>Plan</th><th class="num">Amount</th><th>Status</th><th>Reference</th></tr>
-    ${b.payments.map((p) => `<tr><td>${when(p.created)}</td><td style="text-transform:capitalize">${esc(p.plan)}</td><td class="num">${money(p.amount)}</td><td>${pill(p.status, p.status === "paid" ? "good" : "warn")}</td><td class="mono muted">${esc(p.payment_id || p.order_id)}</td></tr>`).join("")}</table></div>` : `<div class="empty" style="margin:12px">No payments yet.</div>`}</div>`;
-};
-
-function loadScript(src) {
-  return new Promise((ok, fail) => {
-    if (window.Razorpay) return ok();
-    const s = document.createElement("script"); s.src = src; s.onload = ok;
-    s.onerror = () => fail(new Error("Could not load Razorpay checkout. Check your connection or ad blocker."));
-    document.head.appendChild(s);
-  });
-}
 
 const verLabel = (s) => s.version != null ? esc(s.version_name) + "@" + s.version : s.prompt_sha ? "prompt " + esc(s.prompt_sha.slice(0, 8)) : "no prompt";
 
@@ -703,13 +662,13 @@ V.usage = async () => {
   const resets = rm.resets ? new Date(rm.resets * 1000).toLocaleDateString(undefined, { day: "numeric", month: "long", timeZone: "UTC" }) : "";
   // one banner, the most severe that applies: blocked at the cap, past the included runs, or close to them
   const banner = rm.included == null ? "" :
-    rm.used >= rm.hard_cap_runs ? `<div class="callout bad">New runs are being refused: this month's limit of ${int(rm.hard_cap_runs)} runs is reached. It resets on ${resets} (UTC). Upgrade under <a href="#/billing">Plans & billing</a>.</div>` :
-    rm.percent_used >= 100 ? `<div class="callout warn">You've used all ${int(rm.included)} included runs this month. Runs are accepted up to ${int(rm.hard_cap_runs)}; overage is not billed during the beta. It resets on ${resets} (UTC).</div>` :
+    rm.used >= rm.hard_cap_runs ? `<div class="callout bad">New runs are being refused: this month's limit of ${int(rm.hard_cap_runs)} runs is reached. It resets on ${resets} (UTC). Ask for a higher limit and an admin will raise it.</div>` :
+    rm.percent_used >= 100 ? `<div class="callout warn">You've used all ${int(rm.included)} included runs this month. Runs are accepted up to ${int(rm.hard_cap_runs)}; nothing is charged. It resets on ${resets} (UTC).</div>` :
     rm.percent_used >= 80 ? `<div class="callout warn">You've used ${rm.percent_used}% of this month's ${int(rm.included)} included runs. ${rm.hard_cap_runs > rm.included ? `Runs are accepted up to ${int(rm.hard_cap_runs)}.` : "New runs are refused at the limit."} It resets on ${resets} (UTC).</div>` : "";
-  return `<h1>Usage & plan</h1><p class="sub">Plan: <b>${esc(u.plan)}</b>. Limits are enforced by the server. Upgrade under <a href="#/billing">Plans & billing</a>.</p>
+  return `<h1>Usage & plan</h1><p class="sub">Plan: <b>${esc(u.plan)}</b>. Limits are enforced by the server.</p>
   ${banner}
   <div class="grid"><div class="stat"><div class="k">Runs this month</div><div class="v">${int(rm.used)}</div><div class="n">${rm.included == null ? "no limit" : int(rm.included) + " included"}</div></div>
-    <div class="stat"><div class="k">Overage</div><div class="v">${int(rm.overage)}</div><div class="n">${u.limits ? (u.limits.overage ? `not billed in the beta; capped at ${int(rm.hard_cap_runs)}` : "free plan: blocked at the limit") : "local mode"}</div></div>
+    <div class="stat"><div class="k">Overage</div><div class="v">${int(rm.overage)}</div><div class="n">${u.limits ? (u.limits.overage ? `capped at ${int(rm.hard_cap_runs)}` : "free plan: blocked at the limit") : "local mode"}</div></div>
     <div class="stat"><div class="k">Requests (30 days)</div><div class="v">${int(u.requests)}</div></div>
     <div class="stat"><div class="k">Model calls (30 days)</div><div class="v">${int(u.llm_calls)}</div><div class="n">managed agents only</div></div></div>
   ${u.limits ? `<div class="card"><h2 style="margin-top:0">Plan limits</h2><pre>${j(u.limits)}</pre></div>` : ""}
@@ -723,10 +682,10 @@ async function route() {
   const q = Object.fromEntries(new URLSearchParams(qs || ""));
   const [view, a, b] = path.split("/").map(decodeURIComponent);
   const table = { overview: V.overview, runs: a ? V.run : V.runs, datasets: a ? V.dataset : V.datasets, evals: a ? V.eval : V.evals,
-                  compare: V.compare, lab: a ? V.version : V.lab, loop: V.loop, project: V.project, usage: V.usage, billing: V.billing };
+                  compare: V.compare, lab: a ? V.version : V.lab, loop: V.loop, project: V.project, usage: V.usage };
   const fn = table[view] || V.overview;
   const navKey = view === "compare" ? "evals" : (table[view] ? view : "overview");
-  if (!S.pid && !["usage", "billing"].includes(view)) {
+  if (!S.pid && !["usage"].includes(view)) {
     shell(navKey, `<h1>Welcome</h1><p class="sub">Create a project to start, or call <code>SIAClient(project=...)</code> from your app.</p>
       <form class="row card" data-form="newproj"><input name="name" placeholder="my-ai-agent" required><button class="primary">Create project</button></form>`);
     return;
@@ -799,25 +758,6 @@ const FORMS = {
 };
 
 const ACTS = {
-  async pay(d) {
-    const o = await api("/billing/orders", { body: { plan: d.plan } });
-    await loadScript("https://checkout.razorpay.com/v1/checkout.js");
-    const rz = new window.Razorpay({
-      key: o.key_id, amount: o.amount, currency: o.currency, order_id: o.order_id, name: "SIA DevTools",
-      description: `${o.plan[0].toUpperCase() + o.plan.slice(1)} plan, 30 days`,
-      theme: { color: getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#187A6C" },
-      handler: async (resp) => {
-        try {
-          const r = await api("/billing/verify", { body: { order_id: resp.razorpay_order_id, payment_id: resp.razorpay_payment_id, signature: resp.razorpay_signature } });
-          toast(r.status === "paid" ? `Payment confirmed. You're on the ${r.plan} plan.` : r.detail);
-          S.me = await api("/me"); route();
-        } catch (e) { toast(e.message); }
-      },
-      modal: { ondismiss: () => toast("Payment window closed. Nothing was charged.") },
-    });
-    rz.on("payment.failed", (r) => toast("Payment failed: " + (r.error && r.error.description || "unknown error")));
-    rz.open();
-  },
   logout() { logout(); },
   async loopstate(d) {
     if (d.to === "pause" && !await ask({ title: "Pause the loop?", body: "Every canary stops and queued cycles are cancelled. The active versions stay exactly as they are.", ok: "Pause", danger: true })) return;

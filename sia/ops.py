@@ -102,7 +102,7 @@ def restore(db, file, base_url):
     return 0
 
 
-REJECTED_REQUEST_DAYS, UNPAID_ORDER_DAYS = 90, 30
+REJECTED_REQUEST_DAYS = 90
 
 
 def maintenance(db, now=None):
@@ -118,7 +118,7 @@ def maintenance(db, now=None):
     with closing(sqlite3.connect(db, timeout=30)) as c, c:
         runs = 0
         for pid, org, settings in c.execute("SELECT id, org_id, settings FROM projects").fetchall():
-            # the shorter of the plan's retention (an expired paid plan counts as free) and the project's own setting
+            # the shorter of the plan's retention  and the project's own setting
             days = [d for d in ((PLANS.get(plans.get(org)) or {}).get("retention_days"),
                                 json.loads(settings or "{}").get("retention_days")) if d]
             if days:
@@ -126,20 +126,16 @@ def maintenance(db, now=None):
                                   (pid, now - min(days) * 86400)).rowcount
         requests = c.execute("DELETE FROM access_requests WHERE status='rejected' AND decided<?",
                              (now - REJECTED_REQUEST_DAYS * 86400,)).rowcount
-        orders = c.execute("DELETE FROM payments WHERE status='created' AND created<?",
-                           (now - UNPAID_ORDER_DAYS * 86400,)).rowcount
     print(json.dumps({"ts": round(now, 3), "event": "maintenance", "runs_deleted": runs,
-                      "rejected_access_requests_deleted": requests, "unpaid_orders_deleted": orders}))
+                      "rejected_access_requests_deleted": requests}))
     return 0
 
 
-PLACEHOLDER_PRICES = {"pro": 199900, "team": 799900}  # billing.settings() defaults
 BACKUP_MAX_AGE_HOURS = 26  # a daily backup, plus slack
 
 
 def doctor(db, backup_dir="backups", now=None):
     """Launch readiness. Returns [(level, check, detail)], level PASS / WARN / FAIL."""
-    from . import billing
     from . import security as sec
     now, out = now or time.time(), []
     add = lambda level, check, detail: out.append((level, check, detail))  # noqa: E731
@@ -157,16 +153,6 @@ def doctor(db, backup_dir="backups", now=None):
     contact = env.get("SIA_CONTACT_EMAIL", "").strip()
     add("PASS" if contact else "FAIL", "SIA_CONTACT_EMAIL", contact or "unset: the site's Contact links go to GitHub")
 
-    cfg = billing.settings()
-    if not (cfg["key_id"] and cfg["key_secret"]):
-        add("FAIL", "Razorpay keys", "RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET must both be set")
-    elif cfg["key_id"].startswith("rzp_test_"):
-        add("WARN", "Razorpay keys", "test mode (rzp_test_): fine for the beta, switch to live keys to take payments")
-    else:
-        add("PASS", "Razorpay keys", "live keys")
-    add("PASS" if cfg["webhook_secret"] else "FAIL", "RAZORPAY_WEBHOOK_SECRET",
-        "set" if cfg["webhook_secret"] else "unset: the webhook refuses every event")
-
     add(*_db_check(db))
     if env.get("SIA_DEFAULT_LLM_KEY"):  # one server key paying for every organization's model calls
         orgs = _count_orgs(db)
@@ -176,10 +162,6 @@ def doctor(db, backup_dir="backups", now=None):
     recent = [p for p in backups(backup_dir) if now - p.stat().st_mtime < BACKUP_MAX_AGE_HOURS * 3600]         if Path(backup_dir).is_dir() else []
     add("PASS" if recent else "FAIL", "Backups", f"newest: {recent[-1].name}" if recent else
         f"no backup in {backup_dir} from the last {BACKUP_MAX_AGE_HOURS} hours (schedule `sia backup`)")
-    placeholder = [k for k, v in PLACEHOLDER_PRICES.items() if cfg["prices"][k] == v]
-    add("WARN" if placeholder else "PASS", "Prices", f"still the placeholder defaults: {', '.join(placeholder)} "
-        "(set SIA_PRICE_PRO_PAISE / SIA_PRICE_TEAM_PAISE)" if placeholder else
-        f"pro {cfg['prices']['pro']}, team {cfg['prices']['team']} ({cfg['currency']}, smallest unit)")
     return out
 
 

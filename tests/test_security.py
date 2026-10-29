@@ -143,13 +143,6 @@ def test_errors_are_hidden_behind_a_request_id(tmp_path, monkeypatch):
     assert r.json()["request_id"] == r.headers["x-request-id"]
 
 
-def test_webhook_rejects_signed_garbage(tmp_path, monkeypatch):
-    api, c = make(tmp_path, monkeypatch, RAZORPAY_WEBHOOK_SECRET="whsec")
-    body = b"[1, 2"
-    sig = hmac.new(b"whsec", body, hashlib.sha256).hexdigest()
-    assert c.post("/v1/billing/webhook", content=body, headers={"X-Razorpay-Signature": sig}).status_code == 400
-
-
 def test_model_calls_are_capped_per_org_and_in_total():
     slots = sec.Slots(per_key=1, total=2)
     with slots.take("a"):

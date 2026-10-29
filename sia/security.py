@@ -176,13 +176,10 @@ def landing_csp(index_html):
 
 
 def dashboard_csp(dashboard_html):
-    # Razorpay's checkout script and payment window are the only third-party code the dashboard may load
-    return ("default-src 'self'; script-src 'self' " + inline_script_hashes(dashboard_html) +
-            " https://checkout.razorpay.com https://*.razorpay.com; frame-src https://*.razorpay.com; "
-            "connect-src 'self' https://*.razorpay.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src https://fonts.gstatic.com; "
-            "img-src 'self' data: https://*.razorpay.com; frame-ancestors 'none'; base-uri 'none'; "
-            "form-action 'self' https://*.razorpay.com; object-src 'none'")
+    return ("default-src 'self'; script-src 'self' " + inline_script_hashes(dashboard_html) + "; "
+            "connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src https://fonts.gstatic.com; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; "
+            "form-action 'self'; object-src 'none'")
 
 
 COMMON_HEADERS = {
@@ -190,8 +187,7 @@ COMMON_HEADERS = {
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=(), usb=()",
-    # allow-popups: Razorpay opens bank and UPI windows that must report back to the checkout
-    "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+    "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-origin",
 }
 HSTS = "max-age=31536000"

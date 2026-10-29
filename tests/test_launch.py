@@ -265,29 +265,25 @@ def test_backup_of_a_missing_or_corrupt_database_fails(tmp_path):
     assert not list((tmp_path / "b").glob("sia-*.db"))
 
 
-# --- Task 7: pricing from one source of truth -------------------------------------------------------------------
-def test_plans_endpoint_matches_plans_and_env_prices(tmp_path, monkeypatch):
-    api, c = make(tmp_path, monkeypatch, SIA_PRICE_PRO_PAISE="149900", SIA_PRICE_TEAM_PAISE="599900")
+# --- Task 7: plans from one source of truth --------------------------------------------------------------------
+def test_plans_endpoint_matches_plans(tmp_path, monkeypatch):
+    api, c = make(tmp_path, monkeypatch)
     r = c.get("/v1/plans")  # no auth
     assert r.status_code == 200
-    d = r.json()
-    assert d["beta"] is True and d["currency"] == "INR" and d["period_days"] == 30
-    assert set(d["plans"]) == set(api.PLANS)
-    for name, lim in api.PLANS.items():
-        assert {k: v for k, v in d["plans"][name].items() if k != "price"} == lim
-    assert (d["plans"]["free"]["price"], d["plans"]["pro"]["price"], d["plans"]["team"]["price"]) == (0, 149900, 599900)
+    assert r.json() == {"plans": api.PLANS}
+    assert c.get("/v1/billing").status_code == 404 and c.get("/refund").status_code == 404
 
 
-def test_landing_page_static_pricing_matches_plans(tmp_path, monkeypatch):
+def test_landing_page_static_limits_match_plans(tmp_path, monkeypatch):
     api, c = make(tmp_path, monkeypatch)
     html = c.get("/").text
-    for name, lim in api.PLANS.items():  # the no-JS fallback text must not drift from PLANS
-        assert f'data-plan="{name}"' in html
-        assert f"{lim['runs_per_month']:,} runs a month" in html and f"{lim['retention_days']}-day run history" in html
-    assert "Most popular" not in html and "per 30 days" in html and "beta prices" in html
+    lim = api.PLANS["free"]  # the no-JS fallback text must not drift from PLANS
+    assert 'data-plan="free"' in html and 'data-plan="pro"' not in html
+    assert f"{lim['runs_per_month']:,} runs a month" in html and f"{lim['retention_days']}-day run history" in html
+    assert "Razorpay" not in html and "per 30 days" not in html
 
 
-# --- Task 8: refund page ----------------------------------------------------------------------------------------
+# --- Task 8: footer links ----------------------------------------------------------------------------------------
 WEB = Path(__file__).resolve().parents[1] / "web"
 
 
@@ -295,25 +291,20 @@ def test_every_footer_link_resolves(tmp_path, monkeypatch):
     import re
     api, c = make(tmp_path, monkeypatch)
     pages = sorted(WEB.glob("*.html"))
-    assert "refund.html" in [p.name for p in pages]
+    assert "refund.html" not in [p.name for p in pages]
     for page in pages:
         footer = page.read_text(encoding="utf-8").split("<footer", 1)[1]
         hrefs = re.findall(r'href="([^"]+)"', footer)
-        assert "/refund" in hrefs and "/privacy" in hrefs and "/terms" in hrefs, page.name
+        assert "/refund" not in hrefs and "/privacy" in hrefs and "/terms" in hrefs, page.name
         for href in hrefs:
             if href.startswith("/"):  # external links (GitHub) aren't fetched in tests
                 assert c.get(href).status_code == 200, (page.name, href)
 
 
-def test_refund_page_and_terms_use_the_same_wording():
-    import re
-    policy = lambda name: re.findall(r'<li class="policy">(.*?)</li>', (WEB / name).read_text(encoding="utf-8"))  # noqa: E731
-    refund = policy("refund.html")
-    assert len(refund) == 5 and refund == policy("terms.html")
-    text = " ".join(refund)
-    for must in ("don't renew automatically", "within 7 days", "more than 24 hours", "pro rata", "Razorpay",
-                 "5 to 7 working days"):
-        assert must in text
+def test_no_payment_text_anywhere_on_the_site():
+    for page in WEB.glob("*.html"):
+        text = page.read_text(encoding="utf-8").lower()
+        assert "razorpay" not in text and "refund policy" not in text, page.name
 
 
 # --- Task 9: retention job --------------------------------------------------------------------------------------
@@ -337,9 +328,6 @@ def test_maintenance_deletes_exactly_the_expired_rows(tmp_path, monkeypatch, cap
         st.x("INSERT INTO access_requests (id, email, name, status, created, decided) VALUES (?,?,?,?,?,?)",
              f"{status}{age}", f"{status}{age}@example.com", "A", status, now - age * day,
              None if status == "pending" else now - age * day)
-    for order, status, age in (("o31", "created", 31), ("o29", "created", 29), ("o100", "paid", 100)):
-        st.add_payment(order, pro, "pro", 100, "INR")
-        st.x("UPDATE payments SET status=?, created=? WHERE order_id=?", status, now - age * day, order)
 
     capsys.readouterr()
     assert cli.main(["maintenance", "--db", str(tmp_path / "s.db")]) == 0
@@ -350,20 +338,18 @@ def test_maintenance_deletes_exactly_the_expired_rows(tmp_path, monkeypatch, cap
     assert kept == {"free": ["d10", "d5"], "pro": ["d10", "d20", "d5"], "pro7": ["d5"], "lapsed": ["d10", "d5"]}
     assert sorted(r["id"] for r in st.q("SELECT id FROM access_requests")) == ["approved200", "pending200",
                                                                                "rejected89"]
-    assert sorted(r["order_id"] for r in st.q("SELECT order_id FROM payments")) == ["o100", "o29"]
     # 3 + 2 + 3 = 8 deleted here: pro7's own 7-day setting already removed its 4 old runs at ingest
     assert line == {"ts": line["ts"], "event": "maintenance", "runs_deleted": 8,
-                    "rejected_access_requests_deleted": 1, "unpaid_orders_deleted": 1}
+                    "rejected_access_requests_deleted": 1}
 
     assert cli.main(["maintenance", "--db", str(tmp_path / "s.db")]) == 0  # idempotent
     again = json.loads(capsys.readouterr().out)
-    assert (again["runs_deleted"], again["rejected_access_requests_deleted"], again["unpaid_orders_deleted"]) == (0, 0, 0)
+    assert (again["runs_deleted"], again["rejected_access_requests_deleted"]) == (0, 0)
 
 
 # --- Task 10: sia doctor ----------------------------------------------------------------------------------------
 READY = {"SIA_ADMIN_KEY": ADMIN, "SIA_ALLOWED_HOSTS": "sia.example.com", "SIA_TRUSTED_PROXIES": "10.0.0.2",
-         "SIA_CONTACT_EMAIL": "hello@example.com", "RAZORPAY_KEY_ID": "rzp_live_abc", "RAZORPAY_KEY_SECRET": "s",
-         "RAZORPAY_WEBHOOK_SECRET": "w", "SIA_PRICE_PRO_PAISE": "149900", "SIA_PRICE_TEAM_PAISE": "599900"}
+         "SIA_CONTACT_EMAIL": "hello@example.com"}
 
 
 def ready(tmp_path, monkeypatch, **override):
@@ -389,8 +375,7 @@ def test_doctor_all_pass_when_fully_configured(tmp_path, monkeypatch, capsys):
 
 def test_doctor_each_fail(tmp_path, monkeypatch, capsys):
     cases = {"SIA_ADMIN_KEY": {"SIA_ADMIN_KEY": None}, "SIA_CONTACT_EMAIL": {"SIA_CONTACT_EMAIL": None},
-             "SIA_ALLOWED_HOSTS": {"SIA_ALLOWED_HOSTS": None}, "RAZORPAY_WEBHOOK_SECRET": {"RAZORPAY_WEBHOOK_SECRET": None},
-             "Razorpay keys": {"RAZORPAY_KEY_SECRET": None}}
+             "SIA_ALLOWED_HOSTS": {"SIA_ALLOWED_HOSTS": None}}
     for check, override in cases.items():
         r = ready(tmp_path, monkeypatch, **override)
         assert r[check] == "FAIL" and [c for c, lv in r.items() if lv != "PASS"] == [check], check
@@ -401,9 +386,8 @@ def test_doctor_each_fail(tmp_path, monkeypatch, capsys):
 
 
 def test_doctor_warnings(tmp_path, monkeypatch):
-    r = ready(tmp_path, monkeypatch, RAZORPAY_KEY_ID="rzp_test_abc", SIA_TRUSTED_PROXIES=None,
-              SIA_PRICE_PRO_PAISE=None, SIA_PRICE_TEAM_PAISE=None)
-    assert (r["Razorpay keys"], r["SIA_TRUSTED_PROXIES"], r["Prices"]) == ("WARN", "WARN", "WARN")
+    r = ready(tmp_path, monkeypatch, SIA_TRUSTED_PROXIES=None)
+    assert r["SIA_TRUSTED_PROXIES"] == "WARN"
     assert "FAIL" not in r.values()
     assert ready(tmp_path, monkeypatch, SIA_ALLOWED_HOSTS=None, SIA_LOCAL_MODE="1")["SIA_ALLOWED_HOSTS"] == "WARN"
 

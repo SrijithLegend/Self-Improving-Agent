@@ -207,7 +207,7 @@ def test_sentry_reports_unhandled_errors_without_headers_or_bodies(tmp_path, mon
 
     def boom():
         raise RuntimeError("db exploded")
-    monkeypatch.setattr(api.billing, "settings", boom)
+    monkeypatch.setattr(api, "PLANS", type("Boom", (dict,), {"items": lambda self: boom()})())
     from fastapi.testclient import TestClient
     r = TestClient(api.app, raise_server_exceptions=False).get("/v1/plans", headers={"X-LLM-Key": "sk-live-abc"})
     assert r.status_code == 500 and sent["captured"] == 1

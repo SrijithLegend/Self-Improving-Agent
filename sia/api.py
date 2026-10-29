@@ -32,11 +32,10 @@ from sia_devtools.store import LOCAL_ORG, DevStore
 from sia_loop import actor as sia_actor
 from sia_loop import jobs
 
-from . import billing
 from . import security as sec
 from . import ops
 from .llm import LLMError
-from .store import PAID_PERIOD_DAYS, PLANS, Store
+from .store import PLANS, Store
 
 app = FastAPI(title="SIA DevTools API", version="0.1.0",
               description="A release gate for prompt changes: capture runs, verify feedback into "
@@ -467,16 +466,6 @@ class ActivateIn(Strict):
     reviewer: str | None = Field(None, max_length=200)
 
 
-class OrderIn(Strict):
-    plan: Literal["pro", "team"]
-
-
-class VerifyIn(Strict):
-    order_id: str = Field(max_length=64)
-    payment_id: str = Field(max_length=64)
-    signature: str = Field(max_length=128)
-
-
 # --- service routes ------------------------------------------------------------
 @app.api_route("/dashboard", methods=["GET", "HEAD"], include_in_schema=False)
 def dashboard():
@@ -507,8 +496,7 @@ def create_tenant(body: TenantIn, request: Request, x_admin_key: str = Header(de
 
 @app.post("/v1/admin/orgs/{org_id}/plan")
 def set_plan(org_id: str, body: PlanIn, request: Request, x_admin_key: str = Header(default="")):
-    """Payment integration boundary: call this from your billing provider's webhook once a payment is confirmed.
-    SIA never handles card data and never assumes a payment succeeded."""
+    """Admin only: raise or lower an organization's limits by hand. There is no payment step; everything is free."""
     require_admin(request, x_admin_key)
     if not store.set_plan(org_id, body.plan):
         raise HTTPException(404, "Organization not found.")
@@ -557,92 +545,10 @@ def decide_access_request(request_id: str, decision: Literal["approve", "reject"
     return r
 
 
-# --- billing (Razorpay) ------------------------------------------------------------
-def razorpay():
-    cfg = billing.settings()
-    if LOCAL_MODE or not (cfg["key_id"] and cfg["key_secret"]):
-        raise HTTPException(503, "Payments are not configured on this server (set RAZORPAY_KEY_ID and "
-                                 "RAZORPAY_KEY_SECRET).")
-    return billing.Razorpay(cfg["key_id"], cfg["key_secret"])
-
-
-@app.get("/v1/billing")
-def billing_status(t=Depends(tenant)):
-    cfg = billing.settings()
-    org = store.tenant(t["id"]) or {}
-    return {"enabled": bool(cfg["key_id"] and cfg["key_secret"]) and not LOCAL_MODE, "key_id": cfg["key_id"],
-            "currency": cfg["currency"], "prices": cfg["prices"], "plans": PLANS, "plan": t["plan"],
-            "paid_until": org.get("paid_until"), "period_days": 30, "payments": store.payments(t["id"])}
-
-
-@app.post("/v1/billing/orders", status_code=201)
-def create_order(body: OrderIn, t=Depends(tenant)):
-    """Create a Razorpay order for one 30-day period of a plan. The dashboard opens Razorpay Checkout with it."""
-    rzp, cfg = razorpay(), billing.settings()
-    amount = cfg["prices"][body.plan]
-    order = rzp.create_order(amount, cfg["currency"], f"sia-{t['id'][:12]}-{int(time.time())}",
-                             {"org_id": t["id"], "plan": body.plan})
-    store.add_payment(order["id"], t["id"], body.plan, amount, cfg["currency"])
-    return {"order_id": order["id"], "amount": amount, "currency": cfg["currency"], "key_id": cfg["key_id"],
-            "plan": body.plan, "org_name": t["name"]}
-
-
-def _confirm(order_id, payment_id, rzp_order):
-    """Activate the plan only if Razorpay says this order is fully paid in the amount we asked for."""
-    pay = store.payment(order_id)
-    if rzp_order.get("status") != "paid" or rzp_order.get("amount_paid") != pay["amount"]             or rzp_order.get("currency") != pay["currency"]:
-        return False
-    store.mark_paid(order_id, payment_id)
-    return True
-
-
-@app.post("/v1/billing/verify")
-def verify_payment(body: VerifyIn, t=Depends(tenant)):
-    """Checkout callback. The signature proves the ids came from Razorpay; the order is then re-fetched so a
-    payment that is authorized but not yet captured never activates a plan."""
-    pay = store.payment(body.order_id)
-    if not pay or pay["org_id"] != t["id"]:
-        raise NotFound("Order not found.")
-    if not billing.valid_payment_signature(body.order_id, body.payment_id, body.signature,
-                                           billing.settings()["key_secret"]):
-        raise ValidationError("Payment signature does not match.")
-    if pay["status"] != "paid" and not _confirm(body.order_id, body.payment_id, razorpay().order(body.order_id)):
-        return {"status": "pending", "detail": "Razorpay has not confirmed the payment yet; the plan switches as "
-                                                "soon as it does (via webhook)."}
-    org = store.tenant(t["id"])
-    return {"status": "paid", "plan": org["plan"], "paid_until": org["paid_until"]}
-
-
-@app.post("/v1/billing/webhook", include_in_schema=False)
-async def razorpay_webhook(request: Request):
-    """Point a Razorpay webhook (events: order.paid, payment.captured) at this URL."""
-    secret = billing.settings()["webhook_secret"]
-    if not secret:
-        raise HTTPException(503, "RAZORPAY_WEBHOOK_SECRET is not set.")
-    body = await request.body()
-    if not billing.valid_webhook_signature(body, request.headers.get("x-razorpay-signature", ""), secret):
-        security_event(request, "invalid_webhook_signature")
-        raise HTTPException(400, "Invalid webhook signature.")
-    try:
-        event = json.loads(body)
-    except ValueError:
-        event = None
-    if not isinstance(event, dict):
-        raise HTTPException(400, "Webhook body is not a JSON object.")
-    entity = (event.get("payload", {}).get("payment") or {}).get("entity") or {}
-    order_id = entity.get("order_id")
-    pay = store.payment(order_id) if order_id else None
-    if event.get("event") in ("order.paid", "payment.captured") and pay and entity.get("status") == "captured"             and entity.get("amount") == pay["amount"] and entity.get("currency") == pay["currency"]:
-        store.mark_paid(order_id, entity.get("id"))
-    return {"ok": True}  # 2xx for events we ignore too, so Razorpay doesn't retry them
-
-
 @app.get("/v1/plans")
 def plans():
-    """Public: plan limits and prices (smallest currency unit, per 30-day period), for the landing page."""
-    cfg = billing.settings()
-    return {"beta": True, "currency": cfg["currency"], "period_days": PAID_PERIOD_DAYS,
-            "plans": {name: {**lim, "price": cfg["prices"].get(name, 0)} for name, lim in PLANS.items()}}
+    """Public: the limits of each plan, for the landing page. Everything is free."""
+    return {"plans": PLANS}
 
 
 @app.get("/v1/me")
@@ -1146,7 +1052,6 @@ if WEB.is_dir():  # a pip install ships the API without the landing page
 
     @app.api_route("/privacy", methods=["GET", "HEAD"], include_in_schema=False)
     @app.api_route("/terms", methods=["GET", "HEAD"], include_in_schema=False)
-    @app.api_route("/refund", methods=["GET", "HEAD"], include_in_schema=False)
     def legal_page(request: Request):
         return FileResponse(WEB / f"{request.url.path.strip('/')}.html")
 

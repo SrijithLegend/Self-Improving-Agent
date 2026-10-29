@@ -199,7 +199,7 @@ Add `--help` to any command to see all its options, for example `sia eval gate -
 
 ## Status
 
-> **Public beta.** SIA works and is tested, but it is not production-ready yet. See what's missing in
+> **Free, public beta.** SIA costs nothing: self-host it, or ask for the hosted service. It works and is tested, but it is not production-ready yet. See what's missing in
 > [`docs/AUDIT.md`](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/docs/AUDIT.md#3-production-readiness-not-yet),
 > and read [`SECURITY.md`](https://github.com/SrijithLegend/Self-Improving-Agent/blob/main/SECURITY.md) before
 > running it as a server.

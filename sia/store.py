@@ -63,9 +63,8 @@ UPDATE playbooks SET version = (SELECT COUNT(*) FROM playbooks p2 WHERE p2.agent
     HAVING COUNT(*) > 1);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_playbooks_version ON playbooks(agent_id, version)
 """)]
-PAID_PERIOD_DAYS = 30  # one payment buys this many days of a paid plan
-
-# Starting hypotheses for a freemium plan, not validated prices. Enforced server-side in sia/api.py.
+# Plan limits, enforced server-side in sia/api.py. Everything is free: new organizations start on free and an
+# admin raises a plan by hand (POST /v1/admin/orgs/{id}/plan).
 PLANS = {
     "free": {"projects": 1, "runs_per_month": 10_000, "examples_per_dataset": 200, "retention_days": 14,
              "overage": False, "llm_calls_per_month": 500},
@@ -74,8 +73,7 @@ PLANS = {
     "team": {"projects": 100, "runs_per_month": 2_000_000, "examples_per_dataset": 50_000, "retention_days": 365,
              "overage": True, "hard_cap": 2.0, "llm_calls_per_month": 200_000},
 }
-# hard_cap: paid plans may go past their included runs up to this multiple. Overage isn't billed during the beta,
-# so without a cap a paid plan would be unlimited.
+# hard_cap: pro and team may go past their included runs up to this multiple; without it they would be unlimited.
 KEY_SCOPES = ("full", "ingest")  # ingest: send runs and feedback, read the active prompt; nothing else
 
 
@@ -127,7 +125,7 @@ class Store:
         c.execute("INSERT INTO tenants (id, name, created, plan) VALUES (?,?,?,?)", (tid, name, time.time(), plan))
         return {"tenant_id": tid, "name": name, "api_key": self._new_key(c, tid, "default")["api_key"]}
 
-    # a paid plan whose period ran out falls back to free
+    # a plan with an expiry that ran out falls back to free (set_plan never sets one)
     PLAN_SQL = "CASE WHEN t.paid_until IS NOT NULL AND t.paid_until < ? THEN 'free' ELSE t.plan END"
 
     def tenant(self, tenant_id):
@@ -136,8 +134,8 @@ class Store:
         return rows[0] if rows else None
 
     def delete_org(self, tenant_id):
-        """Delete an organization and everything it owns, in one transaction. Usage and payment rows are kept for
-        the books but anonymised: they no longer point at the organization or its projects."""
+        """Delete an organization and everything it owns, in one transaction. Usage rows are kept
+        but anonymised: they no longer point at the organization or its projects."""
         from sia_devtools.store import DevStore
         with self._conn() as c:
             if not c.execute("SELECT 1 FROM tenants WHERE id=?", (tenant_id,)).fetchone():
@@ -146,7 +144,6 @@ class Store:
                 DevStore.purge_project(c, pid)
             c.execute("UPDATE usage SET tenant_id='deleted', agent_id=NULL, project_id=NULL WHERE tenant_id=?",
                       (tenant_id,))
-            c.execute("UPDATE payments SET org_id='deleted' WHERE org_id=?", (tenant_id,))
             for table in ("api_keys", "access_requests"):
                 c.execute(f"DELETE FROM {table} WHERE org_id=?", (tenant_id,))
             c.execute("DELETE FROM tenants WHERE id=?", (tenant_id,))
@@ -157,34 +154,6 @@ class Store:
         if plan not in PLANS:
             raise ValueError(f"plan must be one of {', '.join(PLANS)}")
         return bool(self.n("UPDATE tenants SET plan=?, paid_until=NULL WHERE id=?", plan, tenant_id))
-
-    # --- payments ------------------------------------------------------------
-    def add_payment(self, order_id, tenant_id, plan, amount, currency):
-        self.x("INSERT INTO payments (order_id, org_id, plan, amount, currency, created) VALUES (?,?,?,?,?,?)",
-               order_id, tenant_id, plan, amount, currency, time.time())
-
-    def payment(self, order_id):
-        rows = self.q("SELECT * FROM payments WHERE order_id=?", order_id)
-        return rows[0] if rows else None
-
-    def payments(self, tenant_id, limit=50):
-        return self.q("SELECT * FROM payments WHERE org_id=? ORDER BY created DESC LIMIT ?", tenant_id, limit)
-
-    def mark_paid(self, order_id, payment_id):
-        """Record a confirmed payment and extend the plan by PAID_PERIOD_DAYS. Idempotent: an order that is already
-        paid changes nothing, so a webhook and the checkout callback can both report the same payment."""
-        now = time.time()
-        with self._conn() as c:
-            if not c.execute("UPDATE payments SET status='paid', payment_id=?, paid=? WHERE order_id=? AND status!='paid'",
-                             (payment_id, now, order_id)).rowcount:
-                return False
-            pay = c.execute("SELECT org_id, plan FROM payments WHERE order_id=?", (order_id,)).fetchone()
-            t = c.execute("SELECT plan, paid_until FROM tenants WHERE id=?", (pay["org_id"],)).fetchone()
-            # same plan still running: add to it; otherwise the new period starts now
-            start = t["paid_until"] if t["plan"] == pay["plan"] and (t["paid_until"] or 0) > now else now
-            c.execute("UPDATE tenants SET plan=?, paid_until=? WHERE id=?",
-                      (pay["plan"], start + PAID_PERIOD_DAYS * 86400, pay["org_id"]))
-        return True
 
     def create_key(self, tenant_id, name="key", scope="full"):
         """Keys are stored only as SHA-256 hashes; the plaintext is returned once, here."""
@@ -266,7 +235,7 @@ class Store:
 
     def usage(self, tenant_id, since=0):
         """Requests, LLM calls and units (e.g. runs ingested) per action since a timestamp; kept after agents and
-        projects are deleted, for billing."""
+        projects are deleted."""
         rows = self.q("""SELECT action, COUNT(*) requests, SUM(llm_calls) llm_calls, SUM(units) units FROM usage
                          WHERE tenant_id=? AND created>=? GROUP BY action ORDER BY action""", tenant_id, since)
         return {"requests": sum(r["requests"] for r in rows), "llm_calls": sum(r["llm_calls"] for r in rows),

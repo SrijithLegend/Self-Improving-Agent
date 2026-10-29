@@ -26,7 +26,7 @@ and is now implemented on top of the shared `compare_scores`.
 | 3. SDK + runs | `sia_devtools.SIAClient`: runs, nested runs, `@trace`, errors, latency, tokens/cost, tags, metadata, scores, prompt versions. Hosted mode (background batching, bounded retries, transient failures kept, permanent ones dropped with `last_error`) and local SQLite mode. Client-side redaction and size limits. |
 | 4. Datasets, scoring, feedback | Immutable dataset versions (`added_in`/`removed_in`), history, edits as replacements. Deterministic scorers (`exact_match`, `contains`, `json_match`, `regex`), custom `@scorer`, optional `llm_judge`; deterministic scores outrank model scores. Feedback is pending until verified or rejected; provenance kept. |
 | 5. Improvement lab + CI | `propose_improvement` (verified evidence only, locked text enforced), `compare` (paired, min examples, z·SE noise threshold, regression and critical-regression rules), `approve` (needs an "improved" comparison against the active version under the project policy, or an audited override), `reject`, `activate`, rollback. `sia eval run / compare / gate` with exit codes and JSON. |
-| 6. Hosted API | Organizations, projects, multiple keys with `full`/`ingest` scopes, rotation and revocation, plan limits, 413 body limit, JSON access logs, health check, pagination, admin plan endpoint as the payment boundary. |
+| 6. Hosted API | Organizations, projects, multiple keys with `full`/`ingest` scopes, rotation and revocation, plan limits, 413 body limit, JSON access logs, health check, pagination, admin plan endpoint for raising limits by hand. |
 | 7. Dashboard | Single static page served by the API: overview, runs and traces, datasets and review queue, evaluations and comparisons, improvement lab with diff/approve/reject/rollback, project settings and keys, usage. Real data only. |
 | 8. Docs, deploy, demo | README, `.env.example`, Dockerfile (non-root, healthcheck), `pyproject.toml` (`sia` command), GitHub Actions gate example, `examples/devtools_demo.py`. |
 | 9. Tests | 50 offline tests (see `tests/`), also run on a clean Python 3.11 install. |
@@ -58,10 +58,7 @@ rules are tested, but these must be addressed before hosting paying customers:
 - `sia/agent.py` managed-agent `study` and `improve` still run synchronously inside the request.
 
 **Product**
-- Prices and plan limits are hypotheses. Razorpay is integrated (orders, checkout verification, signed webhooks,
-  30-day passes), tested against a fake Razorpay only; it has not yet been run against a real Razorpay account.
-  No recurring subscriptions or GST invoicing. ~~No refund policy.~~ Done (Task 8, 49796f6): `web/refund.html`, the same
-  wording as terms section 7; refunds are issued by hand from the Razorpay dashboard.
+- Everything is free: payments (Razorpay) were removed. Plan limits are hypotheses; an admin raises them by hand.
 - Only a synchronous Python SDK. No async support, no framework adapters (LangChain, LlamaIndex, ...).
 - The gate can only protect behaviour that the developer's dataset and target function exercise.
 

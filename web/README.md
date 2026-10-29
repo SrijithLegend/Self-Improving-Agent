@@ -58,8 +58,7 @@ Fonts.
   still exists and is documented in the README, but it isn't marketed here.
 - **Results** is the README "Demo results" table for `examples/devtools_demo.py`, shortened to five rows, with its
   "What this does and does not show" caveat.
-- **Pricing.** The Self-host card names the project license, FSL-1.1-ALv2 (`LICENSE.md`). No prices are shown for
-  hosted.
+- **Free.** The Self-host card names the project license, FSL-1.1-ALv2 (`LICENSE.md`). Hosted is free, by request.
 - **Hosted waitlist** opens a `mailto:` addressed to `<body data-contact="">`. It's empty by default, so the
   visitor's mail app opens with a blank To: field. **Set `data-contact` to a real address before publishing.**
 - **Provider marks** are the monochrome Simple Icons 13.21.0 paths for Google Gemini, Claude, OpenAI and Ollama,
@@ -73,7 +72,7 @@ Fonts.
 - **How it works** is five steps in order, each with the real result it produced in the README demo run of
   `examples/devtools_demo.py` (20 October 2026). The excerpts are result fields, not raw terminal output.
 - **Scroll-spy.** The `IntersectionObserver` (rootMargin `-40% 0px -55% 0px`) triggers an update, and the update
-  picks the last section whose top is above the band; Pricing becomes active once the page bottom is reached.
+  picks the last section whose top is above the band; Free becomes active once the page bottom is reached.
   Firing only on intersection skipped sections on fast scrolls and could never reach the last short section.
 - **In-page links** move focus to the section heading (for keyboard and screen-reader users) and close the drawer.
 - **Agent view** fetches `/agent.md` on first use and shows it in a `<pre>`, with "Open raw" and "Copy as
