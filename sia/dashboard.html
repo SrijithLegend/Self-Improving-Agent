@@ -23,7 +23,7 @@
   /* four type sizes for the whole app */
   --t-1: 34px; --t-2: 20px; --t-3: 14.5px; --t-4: 12px;
   /* text on the dark headline card (--hero-bg is dark in both themes) */
-  --on-dark: #EEF1F5; --on-dark-muted: #A9B4C2;
+  --on-dark: #EEF1F5; --on-dark-muted: #A9B4C2; --good-on-dark: #7FD3A0; --bad-on-dark: #F2947D;
   --backdrop: rgba(14, 27, 42, .45);
   --f-display: "Fraunces", "Fraunces Fallback", Georgia, serif;
   --f-body: "IBM Plex Sans", "Plex Sans Fallback", Arial, sans-serif;
@@ -115,6 +115,12 @@ h1 + .sub { margin-bottom: 24px; } .head h1 + .sub { margin-bottom: 0; }
 .stat.hero { background: var(--hero-bg); color: var(--on-dark); }
 .stat.hero .k, .stat.hero .n { color: var(--on-dark-muted); }
 .stat.hero .v { color: var(--on-dark); }
+.gate { background: var(--hero-bg); border: 1px solid var(--line); color: var(--on-dark); padding: 26px 28px; margin-bottom: 16px; display: grid; gap: 8px; }
+.gate .k { font: 500 var(--t-4)/1.3 var(--f-mono); text-transform: uppercase; letter-spacing: .14em; color: var(--on-dark-muted); }
+.gate .v { font: 500 var(--t-1)/1.1 var(--f-display); font-variation-settings: "opsz" 96, "SOFT" 30; letter-spacing: -.02em; }
+.gate .v.pass { color: var(--good-on-dark); } .gate .v.fail { color: var(--bad-on-dark); } .gate .v.hold { color: var(--signal); }
+.gate p { margin: 0; color: var(--on-dark); max-width: 75ch; } .gate .m { color: var(--on-dark-muted); font: var(--t-4)/1.5 var(--f-mono); }
+.gate a { color: var(--on-dark); }
 .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
 .card { min-width: 0; }
 .split > .card { margin-bottom: 0; }
@@ -310,7 +316,7 @@ const NAV = [["Observe", [["overview", "Overview"], ["runs", "Runs"]]],
 function shell(view, body) {
   const opts = S.projects.map((p) => `<option value="${esc(p.id)}" ${p.id === S.pid ? "selected" : ""}>${esc(p.name)}</option>`).join("");
   $("#root").innerHTML = `<div class="app"><nav aria-label="Main">
-    ${BRAND}<div class="who">${esc(S.me.local_mode ? "Local mode" : S.me.name + " · " + S.me.plan + " plan")}</div>
+    ${BRAND}<div class="who">${esc(S.me.local_mode ? "Local mode" : S.me.name)}</div>
     <div class="proj"><select id="proj" aria-label="Project">${opts}<option value="__new">+ New project…</option></select></div>
     ${NAV.map(([sect, items]) => `<div class="sect">${sect}</div>` + items.map(([k, label]) =>
       `<a href="#/${k}" class="${view === k ? "on" : ""}">${label}</a>`).join("")).join("")}
@@ -363,8 +369,10 @@ const V = {};
 V.overview = async () => {
   const o = await api(P() + "/overview");
   const latest = o.latest_comparison;
+  const gate = gatePanel(latest);
   const ev = o.evaluations;
   return `<div class="head"><div><h1>Overview</h1><p class="sub">Production runs only (evaluation traffic excluded). Every number comes from stored data.</p></div></div>
+  ${gate}
   <div class="grid">
     <div class="stat hero"><div class="k">Latest eval score</div><div class="v">${ev[0] ? num(ev[0].summary.score) : "–"}</div><div class="n">${ev[0] ? esc(ev[0].dataset_name) + " v" + ev[0].dataset_version + " · " + verLabel(ev[0]) : "no evaluations yet"}</div></div>
     <div class="stat"><div class="k">Runs</div><div class="v">${int(o.runs)}</div><div class="n">${int(o.errors)} errors</div></div>
@@ -373,13 +381,7 @@ V.overview = async () => {
     <div class="stat"><div class="k">Tokens</div><div class="v">${int((o.prompt_tokens || 0) + (o.completion_tokens || 0))}</div><div class="n">${o.cost != null ? "$" + Number(o.cost).toFixed(4) + " reported cost" : "no cost reported"}</div></div>
     <div class="stat"><div class="k">Feedback to review</div><div class="v">${int(o.feedback.pending || 0)}</div><div class="n">${int(o.feedback.verified || 0)} verified · ${int(o.feedback.rejected || 0)} rejected</div></div>
   </div>
-  <div class="split">
-  <div class="card"><h2 class="label">Latest release decision</h2>${latest ? `
-    <div class="verdict"><div>${pill(latest.verdict)}</div><div><b>${esc(latest.reason)}</b>
-    <p class="muted" style="margin:6px 0 10px">${verLabel(latest.baseline)} <b>${num(latest.baseline.score)}</b> → ${verLabel(latest.candidate)} <b>${num(latest.candidate.score)}</b> on ${latest.n} paired examples · ${ago(latest.created)}</p>
-    <a href="#/compare/${esc(latest.id)}">Open comparison →</a></div></div>` : `<p class="empty">No comparisons yet.</p>`}</div>
   <div class="card"><h2 class="label">Evaluation trend</h2>${chart(ev)}</div>
-  </div>
   <div class="split">
   <div class="card flush"><h2 class="label">Quality by prompt version</h2>${o.by_version.length ? `<div class="tbl"><table>
     <tr><th>Version</th><th class="num">Runs</th><th class="num">Errors</th><th class="num">Latency</th><th class="num">Feedback</th></tr>
@@ -390,6 +392,19 @@ V.overview = async () => {
   </div>
   <div class="card flush"><h2 class="label">Recent evaluations</h2>${evalTable(ev)}</div>`;
 };
+
+const GATE = { improved: ["Safe to release", "pass"], regressed: ["Blocked", "fail"], inconclusive: ["Not proven", "hold"], no_improvement: ["No gain", "hold"] };
+function gatePanel(c) {
+  if (!c) return `<div class="gate"><div class="k">Release gate</div><div class="v hold">No decision yet</div>
+    <p>Run an evaluation on the active prompt and on a candidate, then compare them. The verdict appears here. <code>sia eval run</code> starts one.</p></div>`;
+  const [word, cls] = GATE[c.verdict] || [c.verdict, "hold"];
+  const crit = c.critical_regressions.length;
+  const link = c.candidate.version != null ? `<a href="#/lab/${encodeURIComponent(c.candidate.version_name)}/${c.candidate.version}">Review and decide</a> · ` : "";
+  return `<div class="gate"><div class="k">Release gate · latest comparison</div><div class="v ${cls}">${esc(word)}</div>
+    <p>${esc(c.reason)}</p>
+    <div class="m">${verLabel(c.baseline)} ${num(c.baseline.score)} → ${verLabel(c.candidate)} ${num(c.candidate.score)} · ${c.n} paired examples · ${c.regressions.length} regression${c.regressions.length === 1 ? "" : "s"}${crit ? `, ${crit} critical` : ""} · ${ago(c.created)}</div>
+    <div class="m">${link}<a href="#/compare/${esc(c.id)}">Open comparison</a></div></div>`;
+}
 
 const verLabel = (s) => s.version != null ? esc(s.version_name) + "@" + s.version : s.prompt_sha ? "prompt " + esc(s.prompt_sha.slice(0, 8)) : "no prompt";
 
@@ -665,13 +680,13 @@ V.usage = async () => {
     rm.used >= rm.hard_cap_runs ? `<div class="callout bad">New runs are being refused: this month's limit of ${int(rm.hard_cap_runs)} runs is reached. It resets on ${resets} (UTC). Ask for a higher limit and an admin will raise it.</div>` :
     rm.percent_used >= 100 ? `<div class="callout warn">You've used all ${int(rm.included)} included runs this month. Runs are accepted up to ${int(rm.hard_cap_runs)}; nothing is charged. It resets on ${resets} (UTC).</div>` :
     rm.percent_used >= 80 ? `<div class="callout warn">You've used ${rm.percent_used}% of this month's ${int(rm.included)} included runs. ${rm.hard_cap_runs > rm.included ? `Runs are accepted up to ${int(rm.hard_cap_runs)}.` : "New runs are refused at the limit."} It resets on ${resets} (UTC).</div>` : "";
-  return `<h1>Usage & plan</h1><p class="sub">Plan: <b>${esc(u.plan)}</b>. Limits are enforced by the server.</p>
+  return `<h1>Usage</h1><p class="sub">SIA is free. The server limits how many runs and model calls an organization can use each month, to prevent abuse.</p>
   ${banner}
   <div class="grid"><div class="stat"><div class="k">Runs this month</div><div class="v">${int(rm.used)}</div><div class="n">${rm.included == null ? "no limit" : int(rm.included) + " included"}</div></div>
-    <div class="stat"><div class="k">Overage</div><div class="v">${int(rm.overage)}</div><div class="n">${u.limits ? (u.limits.overage ? `capped at ${int(rm.hard_cap_runs)}` : "free plan: blocked at the limit") : "local mode"}</div></div>
+    <div class="stat"><div class="k">Overage</div><div class="v">${int(rm.overage)}</div><div class="n">${u.limits ? (u.limits.overage ? `capped at ${int(rm.hard_cap_runs)}` : "blocked at the limit") : "local mode"}</div></div>
     <div class="stat"><div class="k">Requests (30 days)</div><div class="v">${int(u.requests)}</div></div>
     <div class="stat"><div class="k">Model calls (30 days)</div><div class="v">${int(u.llm_calls)}</div><div class="n">managed agents only</div></div></div>
-  ${u.limits ? `<div class="card"><h2 style="margin-top:0">Plan limits</h2><pre>${j(u.limits)}</pre></div>` : ""}
+  ${u.limits ? `<div class="card"><h2 style="margin-top:0">Limits</h2><pre>${j(u.limits)}</pre></div>` : ""}
   <div class="card tbl"><table><tr><th>Action</th><th class="num">Requests</th><th class="num">Units</th><th class="num">Model calls</th></tr>
   ${Object.entries(u.by_action).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="num">${int(v.requests)}</td><td class="num">${int(v.units)}</td><td class="num">${int(v.llm_calls)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No usage in the last 30 days.</td></tr>`}</table></div>`;
 };

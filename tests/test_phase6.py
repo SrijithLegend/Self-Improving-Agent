@@ -237,6 +237,8 @@ def test_dashboard_loop_panel_smoke(agent, monkeypatch):
             page.goto(f"http://127.0.0.1:{port}/dashboard")
             page.wait_for_selector("#proj")
             page.select_option("#proj", pid)
+            page.wait_for_selector(".gate")  # the overview opens on the release gate
+            assert "release gate" in page.inner_text(".gate").lower()
             page.goto(f"http://127.0.0.1:{port}/dashboard#/loop")
             panel = page.wait_for_selector("[data-panel=loop]")
             assert "running" in panel.inner_text().lower() and page.input_value("#aut") == "2"
