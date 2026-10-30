@@ -157,7 +157,8 @@ See [`SELF_IMPROVING_SPEC.md`](SELF_IMPROVING_SPEC.md) for the design and `docs/
 
 Try it with no key: `python examples/loop_demo.py --offline`. A returns agent learns the members' 60-day rule,
 wins on the held-out cases and is promoted through a canary. The "friendly" prompt line from the picture above is
-rejected, and when a person forces it into a canary anyway, live outcomes roll it back.
+rejected, and when a person forces it into a canary anyway, the canary's outcomes roll it back. The demo's canaries
+are simulated: outcomes come from replayed cases through a simulated refund system, not from real users.
 
 <!-- LOOP-RESULTS -->
 **On a real model.** `python examples/loop_demo.py --curve` runs the loop for 6 cycles, 3 times over, on 72 refund
@@ -170,8 +171,8 @@ answered correctly; each repeat uses a different split.
 | 2 | 28 | 0.839 | 0.839 | 0.839 | 0.929 | 0.929 | 0.929 | 0.929 | 1 | 0 | 686 |
 | 3 | 22 | 0.955 | 0.955 | 0.955 | 0.955 | 0.955 | 0.955 | 0.955 | 0 | 0 | 1,090 |
 
-Two of three repeats improved on held-out cases (+0.077 and +0.090), each through one change that also won its live
-canary. In the third, the starting version already missed only one case, and all six cycles' candidates were
+Two of three repeats improved on held-out cases (+0.077 and +0.090), each through one change that also won its
+simulated canary (replayed cases, not real users). In the third, the starting version already missed only one case, and all six cycles' candidates were
 rejected on the held-out cases. No critical case regressed. That is not yet the "improves in every repeat" result
 we'd need to claim more; raw numbers are in
 [`docs/loop_results/curve.json`](docs/loop_results/curve.json).
